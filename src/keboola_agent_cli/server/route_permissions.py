@@ -195,6 +195,7 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
     ("DELETE", "/storage/tables/{project}"): "storage.delete-table",
     ("POST", "/storage/tables/{project}/truncate"): "storage.truncate-table",
     ("POST", "/storage/tables/{project}/{table_id:path}/swap"): "storage.swap-tables",
+    ("PUT", "/storage/tables/{project}/{table_id:path}/clustering"): "storage.clustering-set",
     ("POST", "/storage/tables/{project}/{table_id:path}/pull"): "storage.clone-table",
     ("POST", "/storage/tables/{project}/{table_id:path}/describe"): "storage.describe-table",
     # ── storage: columns ─────────────────────────────────────────────
@@ -267,6 +268,7 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
     ("GET", "/flows/{project}/{config_id}/schedules"): "schedule.list",
     ("GET", "/flows/{project}/{config_id}/triggers"): "flow.triggers",
     ("POST", "/flows/{project}/{config_id}/schedule"): "flow.schedule",
+    ("POST", "/flows/{project}/{flow_id}/run"): "flow.run",
     ("DELETE", "/flows/{project}/{config_id}/schedule"): "flow.schedule-remove",
     # ── schedules / notifications ────────────────────────────────────
     ("GET", "/schedules"): "schedule.list",
@@ -281,6 +283,7 @@ ROUTE_OPERATIONS: dict[tuple[str, str], str] = {
         "POST",
         "/notifications/{project}/{subscription_id}/replace-recipient",
     ): "notification.replace-recipient",
+    ("POST", "/notifications/{project}/{subscription_id}/clone"): "notification.clone",
     # ── lineage (all read-only; `build` is the only cache writer) ─────
     ("POST", "/lineage/build"): "lineage.build",
     ("GET", "/lineage/info"): "lineage.info",

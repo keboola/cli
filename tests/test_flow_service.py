@@ -181,7 +181,9 @@ def test_create_flow_attaches_unreachable_warnings():
     svc = _make_flow_service(client)
     phases = [
         {"id": "p1", "name": "P1", "next": [{"id": "n", "goto": None}]},
-        {"id": "island", "name": "Island"},  # unreachable
+        # unreachable: only reaches itself (a phase nothing goes to would be a
+        # second first phase, which is an error)
+        {"id": "island", "name": "Island", "next": [{"id": "self", "goto": "island"}]},
     ]
     tasks = [
         {

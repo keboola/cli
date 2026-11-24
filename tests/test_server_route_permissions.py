@@ -397,6 +397,7 @@ class TestRoutesAddedAfterTheTable:
             ("POST", "/notifications/demo", "notification.create"),
             ("DELETE", "/notifications/demo/1", "notification.delete"),
             ("POST", "/notifications/demo/1/replace-recipient", "notification.replace-recipient"),
+            ("POST", "/notifications/demo/1/clone", "notification.clone"),
         ],
     )
     def test_exact_operation_deny_blocks_the_route(

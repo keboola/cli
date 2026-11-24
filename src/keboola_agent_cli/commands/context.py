@@ -1048,12 +1048,16 @@ explicit Storage config version, never the empty shell the create writes.
     (INVALID_FLOW_DEFINITION on failure). A schema-fetch failure does NOT block the write:
     structural check skipped, semantic checks still run, a warning is surfaced.
     IDs are STRINGS; phases use next[].goto (a phase id or null); tasks are typed
-    (job/notification/variable). Execute with: job run --component-id keboola.flow --config-id ID.
+    (job/notification/variable). Execute with: flow run --flow-id ID.
+    Omit the definition to create an EMPTY flow on purpose; a given definition that
+    is empty, null, has a key other than phases/tasks, or has no phases is refused
+    (VALIDATION_ERROR exit 2 / INVALID_FLOW_DEFINITION exit 1), nothing written.
+    Fill an empty flow with ONE flow update carrying the phases AND their tasks.
 
   flow update
     Update a flow's name, description, or phases/tasks. --definition / --definition-file
-    replaces both phases and tasks.
-    Omitting --file leaves the flow body unchanged. Validated against the live conditional-flow
+    replaces the side(s) it carries (phases and/or tasks); the other is kept.
+    Omitting the definition leaves the flow body unchanged. Validated against the live conditional-flow
     schema on write (merge-aware; INVALID_FLOW_DEFINITION on failure; schema-fetch failure ->
     semantic-only + warning).
 
@@ -1077,6 +1081,19 @@ explicit Storage config version, never the empty shell the create writes.
     Remove all schedules bound to this flow: each schedule is deregistered from the Scheduler
     Service, then its keboola.scheduler config is deleted. Idempotent: safe to run when no
     schedules exist.
+
+  flow run
+    Run a whole flow, or only some tasks: --task-id (repeat) and/or --from-phase-id (that phase
+    plus the phases reached by DEFAULT transitions -- never conditional ones). A partial run does
+    NOT evaluate conditions: every selected task runs, also after a failure, and the flow status
+    can hide a failed task. Run --dry-run first (reads the flow, creates nothing; selection.phases
+    is membership, not execution order). With --wait read failed_task_ids / task_results: exit 1
+    when a selected task failed or left no result; when the flow job itself ended in error
+    (QUEUE_JOB_FAILED) they are in error.details. A --timeout never stops the job (exit 4).
+    Refused before any job is created, --dry-run too, because the job queue would refuse it:
+    a repeated phase/task id, a goto to an undefined phase or not exactly one first phase
+    (INVALID_FLOW_DEFINITION, exit 1); a selected phase the first phase cannot reach, or
+    needed phases that form a loop (INVALID_ARGUMENT, exit 2). Only the selected tasks run.
 """,
     "http": """\
 #### Self-call HTTP (inside `kbagent serve` subprocesses)
@@ -1110,7 +1127,9 @@ explicit Storage config version, never the empty shell the create writes.
 """,
     "init": """\
   init
-    Create local .kbagent/ workspace. --from-global copies existing projects;
+    Create local .kbagent/ workspace. --from-global copies existing projects
+    (a one-time copy of the tokens: after a rotation in the global config,
+    run `project refresh` in the workspace);
     --project ALIAS (repeatable) copies only the named project(s) and implies
     --from-global. When the global active project is not copied, the
     workspace has no active project (`active_project_cleared`, since 0.100.0).
@@ -1136,6 +1155,8 @@ explicit Storage config version, never the empty shell the create writes.
   job run
     Run a Queue API job. --row-id selects specific config rows (repeatable; omit to run entire config).
     --wait polls until job finishes. --timeout sets max wait in seconds (default 300). Branch-aware.
+    For keboola.flow it reads the flow first: one the job queue refuses for every run is
+    INVALID_FLOW_DEFINITION (exit 1) before any job is created. Prefer `flow run` for flows.
     When the config has linked variables (configuration.variables_id), kbagent auto-resolves
     a variableValuesId so the job binds to the deployed values row. --variable-values-id
     overrides; --no-variables skips resolution. Error code NO_VARIABLE_ROWS when the linked
@@ -1154,11 +1175,15 @@ explicit Storage config version, never the empty shell the create writes.
     --json response shapes by exit code:
       - exit 0 (success): {status:"ok", data:{..., logTail?:[...]}}
       - exit 1 (QUEUE_JOB_FAILED, remote job status=error):
-        {status:"error", error:{code:"QUEUE_JOB_FAILED", details:{logTail:[...]}}}
-      - exit 4 (QUEUE_JOB_TIMEOUT, local timeout + remote kill also failed):
-        {status:"error", error:{code:"QUEUE_JOB_TIMEOUT", retryable:true, details:{logTail:[...]}}}
-      - exit 7 (JOB_TIMEOUT_TERMINATED, local timeout + remote kill succeeded):
-        {status:"error", error:{code:"JOB_TIMEOUT_TERMINATED", details:{job:{...}, logTail:[...]}}}
+        {status:"error", error:{code:"QUEUE_JOB_FAILED", retryable:false, details:{job_id, logTail:[...]}}}
+      - exit 4 (QUEUE_JOB_TIMEOUT, local timeout + remote kill failed or unconfirmed):
+        {status:"error", error:{code:"QUEUE_JOB_TIMEOUT", retryable:false, details:{job_id, logTail:[...]}}}
+      - exit 7 (JOB_TIMEOUT_TERMINATED, local timeout + kill accepted, or the job was
+        already finished; details.job.status is the last status seen, may be `terminating`):
+        {status:"error", error:{code:"JOB_TIMEOUT_TERMINATED", retryable:false, details:{job_id, job:{...}, logTail:[...]}}}
+      - any other error after the job was created (connection error, 5xx, exhausted retries while
+        polling): code and exit code as usual, retryable:false, details.job_id. The job may still be
+        running: check `job detail --job-id ID`, never start it again (a retry is a second run).
     jq pattern: `.error.details.logTail? // .data.logTail? // []` picks up the tail regardless of exit.
 
   job terminate
@@ -1322,8 +1347,8 @@ explicit Storage config version, never the empty shell the create writes.
     scope, filters.
     Event names are kebab-case: job-failed, job-succeeded,
     job-succeeded-with-warning, job-processing-long, and the phase-job-*
-    variants. --event is NOT validated against that list (the API declares
-    EventName as an open string).
+    variants. --event is NOT validated by kbagent (the service checks it
+    against its own registry on create).
     ALL filtering is CLIENT-SIDE, --event included: the service accepts
     ?event= and then IGNORES it, answering 200 with the project's full
     subscription list (verified live). kbagent still sends the parameter and
@@ -1339,19 +1364,32 @@ explicit Storage config version, never the empty shell the create writes.
     Builder always writes a branch.id filter and uses the DEFAULT branch's
     numeric id for production. A filled Branch column does NOT mean
     "dev-branch only" -- cross-check `branch list` to tell them apart.
+    The component_id/config_id/branch_id/phase_id columns read only EQUALITY
+    filters (since 1.4.0): a branch.id < 123 filter leaves branch_id empty.
 
   notification detail
-    One subscription with every filter printed verbatim, including threshold
-    filters like durationOvertimePercentage that have no dedicated column.
+    One subscription with every filter printed verbatim, including the
+    durationOvertimePercentage threshold (also in overtime_percent).
 
   notification create
     Create a subscription (since 0.91.0). --address carries the email address
     (--channel email) or the webhook URL (--channel webhook) -- the wire shape
     is channel-discriminated, the CLI takes one flag either way. An invalid
     --channel is a structured INVALID_ARGUMENT, exit 2.
-    WITHOUT --branch no branch.id filter is written, unlike the UI which
-    always writes one. An absent filter does not constrain matching, so such
-    a subscription fires for jobs on EVERY branch.
+    WITHOUT --branch (and without a --filter 'branch.id=...') kbagent sends
+    no branch.id filter; the Notification Service stores the default
+    branch's id itself (production only).
+    --overtime-percent N: the "job runs longer than usual" threshold, a whole
+    percent 1-10000 (50 = 50 % longer; kbagent refuses 0, which would match
+    every overtime step like no threshold), only for job-processing-long and
+    phase-job-processing-long (else INVALID_ARGUMENT, exit 2). Rows carry
+    overtime_percent.
+    --filter 'FIELD<OP>VALUE' (since 1.4.0, repeatable, OP ==,=,<=,>=,<,>):
+    any filter the service accepts for the event, e.g.
+    --filter 'averageDuration>=60'. QUOTE it (< and > are shell
+    redirections). VALUE is sent as a string. The service refuses an unknown
+    field. A --filter on a field a dedicated option sets, or one
+    field+operator twice, is INVALID_ARGUMENT, exit 2, before any call.
 
   notification delete
     Delete a subscription (since 0.91.0). Confirms unless --yes or --json.
@@ -1367,9 +1405,25 @@ explicit Storage config version, never the empty shell the create writes.
     subscription. --channel defaults to the old subscription's channel.
     Confirms unless --yes or --json.
 
-  Permission classes: notification.create and notification.replace-recipient
-  are `write`, notification.delete is `destructive`. --deny-writes blocks all
-  three; --deny-destructive blocks only delete. list/detail stay `read`.
+  notification clone
+    Create a NEW subscription from an existing one with overrides (since
+    1.4.0), e.g. the same alert on another flow: --config-id K. Event and
+    project never change; the source is untouched. Each override
+    (--component-id, --config-id, --branch, --overtime-percent, each --filter
+    FIELD) replaces EVERY source filter on that field; the rest is copied
+    verbatim. Without --branch the source's branch.id is kept (the active
+    branch is NOT applied). --address alone keeps the channel; --channel needs
+    --address; expiry inherited unless --expires-at / --clear-expires-at.
+    Warnings: a copied phase.id when the config or component is overridden
+    (option or --filter) and phase.id is not; no branch filter. No prompt,
+    and EVERY run creates one more subscription: --dry-run first (one read,
+    returns `planned`), ask the user, then run once. After a lost response
+    check `notification list` before re-running.
+
+  Permission classes: notification.create, notification.replace-recipient and
+  notification.clone are `write`, notification.delete is `destructive`.
+  --deny-writes blocks all of them (clone --dry-run too); --deny-destructive
+  blocks only delete. list/detail stay `read`.
 """,
     "org": """\
 #### Organization Management
@@ -1534,6 +1588,15 @@ explicit Storage config version, never the empty shell the create writes.
   kbagent project refresh --all-projects [--dry-run] [--force] [--yes] [--token-description ...] [--token-expires-in N]
     Refresh project tokens via Manage API. --all-projects refreshes all projects (since 1.0.0 --all is removed);
     without --project and --all-projects, the active project. --force replaces non-expiring tokens.
+    In a local .kbagent/ directory an INVALID_TOKEN project first takes the
+    one verified token the global config holds for it (`projects_adopted`);
+    the Manage token is asked for only when a token must be minted. Without
+    one (no terminal, no --allow-env-manage-token) a --json or --yes run fails
+    those projects MANAGE_TOKEN_REQUIRED (exit 1) and still writes the adoptions. A
+    global token with fewer rights than a new one is not taken
+    (`global_token_not_used`, reason `scoped`).
+    Agents: --dry-run first, then ask the user; never edit config.json and
+    never add --force for this (it mints new tokens and needs a Manage token).
     Browser-login (session) projects are reported under "skipped" with the
     reason that there is no static token to replace -- their access token
     rotates on its own from auth.json. --force does NOT convert them either;
@@ -1841,11 +1904,11 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     ASK THE USER before ever passing --scope organization|targeted.
 
   semantic-layer edit metric|dataset|constraint|relationship|glossary ...
-    In-place PUT (same id, scope and grants). Metric rename cascades through
-    every constraint referencing the old name (each PUT with updated
-    metrics[]); CODE_METRIC warning shown
-    (re.sub(r"[^A-Z0-9]+", "_", name.upper()).strip("_")). A failed PUT
-    changes nothing (the `rollback` field is always null).
+    In-place PATCH of only the keys passed (same id, scope and grants).
+    Metric rename cascades through every constraint referencing the old name
+    (each a PATCH of its metrics[] only); CODE_METRIC warning shown
+    (re.sub(r"[^A-Z0-9]+", "_", name.upper()).strip("_")). The `rollback`
+    field is always null.
     --yes skips the confirm prompt. `edit relationship` accepts --new-from /
     --new-to / --new-on / --new-type (left|inner). `edit glossary` accepts
     --new-term (destructive cascade; requires --yes in non-TTY) / --new-definition.
@@ -1856,10 +1919,16 @@ kbagent to MISSING_MASTER_TOKEN (exit 3) with the remedy (#711). Pre-flight:
     --new-metric ...`. Human-mode CLI prints a red `PARTIAL STATE` banner
     above the per-entry list. `edit_simple` (no-cascade variants) carries
     `partial_state: false, recovery_hint: null` for envelope uniformity.
-    Edits update the item in place (PUT): it keeps its id, scope,
+    Edits PATCH only the keys passed, in place (a concurrent change to another
+    key survives; import --overwrite / promote PUT the whole item): it keeps its id, scope,
     target-project grants (`scope get` below), pending elevation request and
     revision history -- editing an organization/targeted item never
-    downgrades it. A failed edit changes nothing.
+    downgrades it. A refused edit changes nothing; a PATCH whose response was
+    lost (5xx, read timeout) may have been applied and is not retried --
+    re-read with `show` first. Two edits of the SAME key: the last one wins.
+    Run `validate` after a metric rename (a constraint that starts
+    referencing the metric while the rename runs is missed). When every
+    value passed equals the stored one nothing is written and the result has status "unchanged" (exit 0), else "updated".
 
   semantic-layer remove metric|dataset|constraint|relationship|glossary ...
     Destructive. `remove metric` pre-scans constraints whose metrics[] includes
@@ -2076,6 +2145,17 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Also returns `backend_path` (the owning bucket's Storage backendPath, verbatim) and `sql_path`
     (the quoted, directly queryable table path; null when Storage reports no location) (since
     0.95.0, #761). A linked bucket's path is the SOURCE project's database + schema.
+
+  storage clustering-set
+    Change the clustering of a typed BigQuery table IN PLACE (no copy, no swap): --clustering-field
+    COL (repeatable, 1 to 4, order matters) replaces it, --clear removes it. Waits for the job,
+    then reads `table-detail`; the result has `status` updated | unchanged (unchanged = the table
+    already has that clustering, nothing written), `clustering_before`, `clustering`, `job_id`.
+    Storage's 422 `storage.tables.clusteringUpdateNotAllowed` (not BigQuery, alias, external
+    bucket, unknown column, more than 4 fields) is INVALID_ARGUMENT, exit 2, with
+    `details.api_error_code`. BigQuery clusters data written after the change; existing rows keep
+    their order until rewritten. For an immediate full reclustering use the
+    `create-table --source-table-id` + `swap-tables` path.
 
   storage create-bucket
     Create a new storage bucket. Stage must be "in" or "out". Branch-aware.
@@ -2445,8 +2525,27 @@ remain branch-aware because modifying a dev branch is the expected intent.
     (a config's rows included) or one without a trustworthy baseline -- it is a CONFLICT,
     listed with its next step in refused_deletions[]. sync diff lists rows added in the UI
     under remote_only_rows[] (push never creates or deletes them).
-    A config DELETE is conditional (If-Match on the version push read): a config edited in
-    the UI after that read is not deleted -- errors[] entry SYNC_CONFLICT, exit 1; pull first.
+    A config DELETE and a config UPDATE are conditional (If-Match on the version push read):
+    a config edited in the UI after that read is neither deleted nor overwritten -- errors[]
+    entry SYNC_CONFLICT, exit 1, local files and manifest untouched, and its rows are not
+    pushed either (one entry each, with the config's own error code). A plain pull or a
+    manual merge keeps the old baseline: copy the folder(s) aside, pull --theirs (overwrites
+    every local change), re-apply, sync diff, sync push.
+    Push reads a config's files once: a file changed while it reads is SYNC_LOCAL_FILE_CHANGED
+    (nothing sent; push again). A file edited during the update is not overwritten
+    (warnings[] LOCAL_EDIT_DURING_PUSH) and stays a local change for the next push.
+    Do not edit the tree while push runs; never re-run push blindly after SYNC_CONFLICT.
+    Rows (since 1.4.0): push reads the parent config right before its first row write and
+    blocks all its rows (errors[] SYNC_CONFLICT or the read's code, nothing written) unless
+    the version matches what diff read (parent_remote_version) or what push's own update
+    answered. The window after that check is not bounded: run sync diff right before push.
+    One run per folder (since 1.4.0): every sync command (and config new --output-dir /
+    config rename --directory into a tree) holds .keboola/lock; a second run fails at once
+    with SYNC_DIRECTORY_BUSY (exit 1, retryable): wait for the other run, then run it again.
+    Never delete .keboola/lock (a crashed run frees it). Needs a local disk.
+    sync pull records folders it deletes under manifest pendingRemovals first: never edit
+    that key, never run an older kbagent on such a tree (it re-creates them);
+    PENDING_REMOVAL_KEPT = ask the user to delete or move the folder.
     Fails if encryption fails (plaintext secrets never pushed). Use escape hatch flag only if you know what you are doing.
     Every secret is encrypted BEFORE the first write (since 0.99.0, #792 F): an
     ENCRYPTION_FAILED stops the push before anything reaches the remote (message ends
@@ -2591,6 +2690,14 @@ remain branch-aware because modifying a dev branch is the expected intent.
     --storage REPLACES configuration.storage wholesale -- include every
     mapping you want to keep. --dry-run previews the resulting tree + op
     summary without writing.
+
+  Skipped SELECTs: the Snowflake / BigQuery runtime skips every statement
+  that starts with SELECT, so a job whose SQL only SELECTs succeeds even
+  when a table is missing. create / edit / `sync push` add a
+  SQL_SELECT_SKIPPED_BY_RUNTIME warnings[] entry, `doctor --check
+  skipped-selects` lists them in all connected projects. A data check that must stop the job is
+  SET ABORT_TRANSFORMATION = (SELECT IFF(<ok>, '', '<message>') ...),
+  never SELECT ... 1/0.
 """,
     "update": """\
   update
@@ -2911,7 +3018,7 @@ _FOOTER = """\
        out while the server job keeps running
   5    Configuration error (corrupt config, missing alias)
   6    Permission denied (operation blocked by policy)
-  7    Job timed out and was cancelled (JOB_TIMEOUT_TERMINATED)
+  7    Job timed out and a kill was accepted (JOB_TIMEOUT_TERMINATED)
   130  Interrupted (Ctrl-C)
 
 When you receive a non-zero exit code, use --json to get structured error details.

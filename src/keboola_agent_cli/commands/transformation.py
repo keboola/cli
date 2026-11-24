@@ -199,6 +199,8 @@ def transformation_create(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
+    emit_result_warnings(formatter, result)
+
     def _human(console: Console, data: dict[str, Any]) -> None:
         if data.get("dry_run"):
             console.print(
@@ -396,6 +398,8 @@ def transformation_edit(
         emit_api_error(formatter, exc)
         raise typer.Exit(code=map_error_to_exit_code(exc)) from None
 
+    emit_result_warnings(formatter, result)
+
     def _human(console: Console, data: dict[str, Any]) -> None:
         if data.get("dry_run"):
             console.print("[bold yellow]Dry run[/bold yellow] - no changes written.")
@@ -410,6 +414,18 @@ def transformation_edit(
             )
 
     formatter.output(result, _human)
+
+
+def emit_result_warnings(formatter: Any, result: dict[str, Any]) -> None:
+    """Move the service result's ``warnings`` to the command's warnings.
+
+    Each entry becomes a ``warnings[]`` entry of the ``--json`` envelope (its
+    ``code`` and the other fields kept) and a ``Warning:`` line on stderr in
+    human mode. Called before ``formatter.output()``: a later warning is lost.
+    """
+    for entry in result.pop("warnings", None) or []:
+        extra = {key: value for key, value in entry.items() if key not in ("code", "message")}
+        formatter.warning(escape(entry["message"]), code=entry["code"], **extra)
 
 
 def _collect_ops(op: list[str] | None, op_file: Path | None) -> list[dict[str, Any]]:

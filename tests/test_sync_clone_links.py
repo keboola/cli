@@ -323,6 +323,7 @@ class StorageFake:
     def find(self, component_id: str, config_id: str) -> dict[str, Any]:
         for config in self.configs_of(component_id):
             if str(config["id"]) == str(config_id):
+                config.setdefault("version", 1)
                 return config
         raise KeyError(f"{component_id}/{config_id}")
 
@@ -352,6 +353,9 @@ class StorageFake:
         return [{"id": self.project_id * 10, "name": "Main", "isDefault": True}]
 
     def list_components_with_configs(self, branch_id: int | None = None) -> list[dict[str, Any]]:
+        for comp in self.components:  # Storage lists every config with its version
+            for config in comp["configurations"]:
+                config.setdefault("version", 1)
         return copy.deepcopy(self.components)
 
     def set_config_metadata(self, **kwargs: Any) -> None:
@@ -407,6 +411,7 @@ class StorageFake:
         branch_id: int | None = None,
         is_disabled: bool | None = None,
         folder: str | None = None,
+        expected_version: int | None = None,
     ) -> dict[str, Any]:
         self.update_calls.append(
             {"component_id": component_id, "config_id": config_id, "configuration": configuration}
@@ -420,8 +425,13 @@ class StorageFake:
             ) and change_description.startswith(fail_description):
                 self.fail_update_once.discard(key)
                 raise KeboolaApiError("Storage refused the update", status_code=500)
+        if expected_version is not None and expected_version != config["version"]:  # If-Match
+            raise KeboolaApiError(
+                f"Configuration {config_id} is at version {config['version']}", status_code=412
+            )
         if configuration is not None:
             config["configuration"] = copy.deepcopy(configuration)
+        config["version"] += 1  # every write raises the version
         return copy.deepcopy(config)
 
     def create_config_row(
@@ -438,10 +448,12 @@ class StorageFake:
         if name in self.fail_row_names:
             raise KeboolaApiError("Storage refused the row", status_code=500)
         row = _row(f"newrow-{next(self._ids)}", name, copy.deepcopy(configuration))
-        rows = self.find(component_id, config_id)["rows"]
-        rows.append(row)
+        parent = self.find(component_id, config_id)
+        parent["rows"].append(row)
+        parent["version"] += 1  # a row write raises its config's version
         if name in self.rows_added_with:
-            rows.append(copy.deepcopy(self.rows_added_with[name]))
+            parent["rows"].append(copy.deepcopy(self.rows_added_with[name]))
+            parent["version"] += 1
         return copy.deepcopy(row)
 
 

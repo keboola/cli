@@ -747,3 +747,151 @@ class TestTransformationEdit:
 
         assert result.exit_code == 2, result.output
         assert json.loads(result.output)["error"]["code"] == "INVALID_ARGUMENT"
+
+
+class TestSelectSkipWarning:
+    """A statement the runtime skips (a leading SELECT) warns, never blocks."""
+
+    def test_create_warns_and_still_writes(self, tmp_path: Path) -> None:
+        client = _make_client("snowflake")
+        app = _build_app(_make_store(tmp_path), client)
+
+        result = runner.invoke(
+            app,
+            [
+                "--json",
+                "transformation",
+                "create",
+                "--project",
+                "prod",
+                "--name",
+                "Broken",
+                "--sql",
+                'CREATE TABLE "ok" AS SELECT 1; SELECT * FROM table_that_does_not_exist;',
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        client.create_config.assert_called_once()
+        assert payload["data"]["config_id"] == "9001"
+        assert "warnings" not in payload["data"]  # moved to the envelope
+        (warning,) = payload["warnings"]
+        assert warning["code"] == "SQL_SELECT_SKIPPED_BY_RUNTIME"
+        assert warning["component_id"] == "keboola.snowflake-transformation"
+        assert warning["statement"] == {
+            "block": "Blocks",
+            "code": "Code",
+            "index": 1,
+            "excerpt": "SELECT * FROM table_that_does_not_exist;",
+        }
+
+    def test_create_dry_run_warns(self, tmp_path: Path) -> None:
+        client = _make_client("bigquery")
+        app = _build_app(_make_store(tmp_path), client)
+
+        result = runner.invoke(
+            app,
+            [
+                "--json",
+                "transformation",
+                "create",
+                "--project",
+                "prod",
+                "--name",
+                "Dry",
+                "--sql",
+                "select 1;",
+                "--dry-run",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert [w["code"] for w in payload["warnings"]] == ["SQL_SELECT_SKIPPED_BY_RUNTIME"]
+        client.create_config.assert_not_called()
+
+    def test_create_without_select_has_no_warning(self, tmp_path: Path) -> None:
+        client = _make_client("snowflake")
+        app = _build_app(_make_store(tmp_path), client)
+
+        result = runner.invoke(
+            app,
+            [
+                "--json",
+                "transformation",
+                "create",
+                "--project",
+                "prod",
+                "--name",
+                "Fine",
+                "--sql",
+                'CREATE TABLE "t" AS SELECT 1; WITH a AS (SELECT 1) SELECT * FROM a;',
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "warnings" not in json.loads(result.output)
+
+    def test_create_human_mode_prints_warning(self, tmp_path: Path) -> None:
+        client = _make_client("snowflake")
+        app = _build_app(_make_store(tmp_path), client)
+
+        result = runner.invoke(
+            app,
+            [
+                "transformation",
+                "create",
+                "--project",
+                "prod",
+                "--name",
+                "Broken",
+                "--sql",
+                "SELECT * FROM missing;",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "SELECT * FROM missing;" in result.stderr
+        client.create_config.assert_called_once()
+
+    def test_edit_dry_run_warns_on_added_select(self, tmp_path: Path) -> None:
+        client = _make_client()
+        detail = _config_detail()
+        detail["configuration"]["parameters"]["blocks"][0]["codes"][0]["script"] = [
+            'CREATE TABLE "a" AS SELECT 1;'
+        ]
+        client.get_config_detail.return_value = detail
+        app = _build_app(_make_store(tmp_path), client)
+
+        result = runner.invoke(
+            app,
+            [
+                "--json",
+                "transformation",
+                "edit",
+                "--project",
+                "prod",
+                "--config-id",
+                "123",
+                "--component-id",
+                "keboola.snowflake-transformation",
+                "--change-description",
+                "add a check",
+                "--op",
+                (
+                    '{"op": "add_script", "block_id": "b0", "code_id": "b0.c0", '
+                    '"script": "SELECT * FROM missing;", "position": "end"}'
+                ),
+                "--dry-run",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        client.update_config.assert_not_called()
+        (warning,) = payload["warnings"]
+        assert warning["code"] == "SQL_SELECT_SKIPPED_BY_RUNTIME"
+        assert warning["config_id"] == "123"
+        assert warning["statement"]["code"] == "load"
+        assert warning["statement"]["excerpt"] == "SELECT * FROM missing;"

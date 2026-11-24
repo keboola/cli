@@ -83,8 +83,19 @@ class TestCopyAndRepoint:
         source.mkdir()
         target = tmp_path / "dst"
         target.mkdir()
+        (target / "notes.txt").write_text("mine", encoding="utf-8")
         with pytest.raises(FileExistsError):
             copy_reference_tree(source, target)
+
+    def test_copy_into_an_existing_empty_target(self, tmp_path: Path) -> None:
+        """An empty target folder is a fresh one (#827 round 2, item B)."""
+        source = tmp_path / "src"
+        source.mkdir()
+        (source / "f.txt").write_text("data", encoding="utf-8")
+        target = tmp_path / "dst"
+        target.mkdir()
+        copy_reference_tree(source, target)
+        assert (target / "f.txt").read_text(encoding="utf-8") == "data"
 
     def test_repoint_manifest_project(self) -> None:
         m = _manifest([])

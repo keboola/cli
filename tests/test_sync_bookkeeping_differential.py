@@ -224,6 +224,7 @@ class Api:
     def _list(self, branch_id: int | None = None, **_: Any) -> list[dict[str, Any]]:
         by_comp: dict[str, list[dict[str, Any]]] = {}
         for (comp, _cid), cfg in self.remote[self._b(branch_id)].items():
+            cfg.setdefault("version", 1)  # Storage lists every config with its version
             by_comp.setdefault(comp, []).append(copy.deepcopy(cfg))
         return [
             {"id": comp, "type": self.types.get(comp, "other"), "configurations": cfgs}
@@ -270,9 +271,17 @@ class Api:
         description: str | None = None,
         branch_id: int | None = None,
         is_disabled: bool | None = None,
+        expected_version: int | None = None,
         **_: Any,
     ) -> dict:
         cfg = self.remote[self._b(branch_id)][(component_id, config_id)]
+        version = cfg.get("version", 1)
+        if expected_version is not None and version != expected_version:  # If-Match
+            raise KeboolaApiError(
+                f"Configuration {config_id} is at version {version}, "
+                f"expected version {expected_version}",
+                status_code=412,
+            )
         if configuration is not None:
             cfg["configuration"] = copy.deepcopy(configuration)
         if name is not None:
@@ -306,6 +315,7 @@ class Api:
         config = self.remote[self._b(branch_id)].get((component_id, config_id))
         if config is None:  # Storage answers 404 for a config it does not have
             raise KeboolaApiError(f"Configuration {config_id} not found", status_code=404)
+        config.setdefault("version", 1)
         return copy.deepcopy(config)
 
     def _rows_of(self, component_id: str, config_id: str, branch_id: int | None) -> list[dict]:

@@ -19,6 +19,7 @@ from typing import Any
 
 from ..constants import KEBOOLA_DIR_NAME, MANIFEST_FILENAME
 from ..errors import ConfigError
+from .dir_lock import is_directory_busy
 from .manifest import Manifest, ManifestBranch, load_manifest, save_manifest
 from .naming import sanitize_name
 
@@ -118,6 +119,8 @@ def resolve_scaffold_placement(
             register_branch_dir(project, project_root, int(branch_id), client_factory)
         )
     except Exception as exc:
+        if is_directory_busy(exc):  # another run holds the tree: never a fallback (L6)
+            raise
         fallback = fallback_branch_dir(branch_id)
         warning = (
             f"Could not resolve the manifest directory for branch {branch_id} "

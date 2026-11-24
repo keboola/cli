@@ -3475,6 +3475,7 @@ class TestJobServiceRunJob:
             branch_id=None,
             variable_values_id=None,
             mode="run",
+            only_flow_task_ids=None,
         )
         mock_client.close.assert_called_once()
 
@@ -3520,6 +3521,7 @@ class TestJobServiceRunJob:
             branch_id=789,
             variable_values_id=None,
             mode="run",
+            only_flow_task_ids=None,
         )
 
     def test_run_job_with_branch_and_wait(self, tmp_config_dir: Path) -> None:
@@ -3567,6 +3569,7 @@ class TestJobServiceRunJob:
             branch_id=123,
             variable_values_id=None,
             mode="run",
+            only_flow_task_ids=None,
         )
         mock_client.wait_for_queue_job.assert_called_once_with(
             "557", max_wait=60.0, poll_strategy="exponential"
@@ -3886,7 +3889,10 @@ class TestJobServiceQueuePollingParity:
         )  # job id wins over runId (#787)
 
     def test_run_job_timeout_kill_fails_falls_back(self, tmp_config_dir: Path) -> None:
-        """If kill_job AND the follow-up GET fail, surface QUEUE_JOB_TIMEOUT (retryable)."""
+        """If kill_job AND the follow-up GET fail, surface QUEUE_JOB_TIMEOUT.
+
+        The job may still run, so it is not retryable and names the job (#725 follow-up).
+        """
         mock_client = MagicMock()
         mock_client.create_job.return_value = {"id": 706, "status": "waiting"}
         mock_client.wait_for_queue_job.side_effect = KeboolaApiError(
@@ -3919,7 +3925,8 @@ class TestJobServiceQueuePollingParity:
                 no_variables=True,
             )
         assert exc_info.value.error_code == "QUEUE_JOB_TIMEOUT"
-        assert exc_info.value.retryable is True
+        assert exc_info.value.retryable is False
+        assert exc_info.value.details["job_id"] == "706"
 
     def test_run_job_log_tail_fetch_failure_is_swallowed(self, tmp_config_dir: Path) -> None:
         """A failing fetch_job_events must not mask the original job failure."""
@@ -3950,10 +3957,13 @@ class TestJobServiceQueuePollingParity:
         assert exc_info.value.error_code == "QUEUE_JOB_FAILED"
         assert "logTail" not in exc_info.value.details
 
-    def test_run_job_unhandled_wait_code_bubbles_up_unchanged(self, tmp_config_dir: Path) -> None:
+    def test_run_job_unhandled_wait_code_keeps_code_names_the_job(
+        self, tmp_config_dir: Path
+    ) -> None:
         """A wait error that is neither QUEUE_JOB_FAILED nor QUEUE_JOB_TIMEOUT
-        must re-raise the original instance with no mutation and no kill attempt.
-        Locks the observability fall-through path added in the review loop."""
+        keeps its code, makes no kill attempt and no tail fetch, but is raised
+        as a failure after the job was created: not retryable, with the job id
+        (#725 follow-up; a retry would start a second job)."""
         mock_client = MagicMock()
         mock_client.create_job.return_value = {"id": 708, "status": "waiting"}
         mock_client.wait_for_queue_job.side_effect = KeboolaApiError(
@@ -3976,8 +3986,10 @@ class TestJobServiceQueuePollingParity:
         # No tail fetch, no kill -- this path is for errors we don't specialise.
         mock_client.fetch_job_events.assert_not_called()
         mock_client.kill_job.assert_not_called()
-        # exc passes through without a logTail (mutation would be a bug).
         assert "logTail" not in exc_info.value.details
+        assert exc_info.value.retryable is False
+        assert exc_info.value.details == {"job_id": "708"}
+        assert "kbagent job detail --project prod --job-id 708" in exc_info.value.message
 
     def test_run_job_failure_exception_chaining_does_not_mutate_original(
         self, tmp_config_dir: Path
@@ -4261,6 +4273,7 @@ class TestJobServiceVariableValuesResolution:
             branch_id=None,
             variable_values_id="row-first",
             mode="run",
+            only_flow_task_ids=None,
         )
 
     def test_run_job_explicit_override_wins(self, tmp_config_dir: Path) -> None:

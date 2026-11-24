@@ -200,6 +200,9 @@ class _StorageTablesMixin(_CoreClient):
         description_set: bool = False,
         is_description_system_managed: bool | None = None,
         branch_id: int | None = None,
+        clustering: list[str] | None = None,
+        clustering_set: bool = False,
+        max_wait: float | None = None,
     ) -> dict[str, Any]:
         """Update a table's native definition (async, waits for the storage job).
 
@@ -229,12 +232,16 @@ class _StorageTablesMixin(_CoreClient):
                 as user-authored so the next component run's Output Mapping
                 does not overwrite them. Omitted from the body when ``None``.
             branch_id: If set, target a specific dev branch.
+            clustering: BigQuery clustering fields; ``None`` with ``clustering_set`` removes it.
+            clustering_set: Send the ``clustering`` key; without it the clustering is untouched.
+            max_wait: Seconds to wait for a clustering job (default ``STORAGE_JOB_MAX_WAIT``).
 
         Returns:
             Completed storage job dict.
 
         Raises:
-            KeboolaApiError: If the storage job fails or times out.
+            KeboolaApiError: If the storage job fails or times out. A clustering
+                wait timeout is ``retryable=False`` with ``details.job_id``.
         """
         branch_ref = str(branch_id) if branch_id else "default"
         safe_id = quote(table_id, safe="")
@@ -245,11 +252,20 @@ class _StorageTablesMixin(_CoreClient):
             body["description"] = description
         if is_description_system_managed is not None:
             body["isDescriptionSystemManaged"] = is_description_system_managed
+        if clustering_set:
+            body["clustering"] = {"fields": clustering} if clustering is not None else None
         response = self._request(
             "PUT",
             f"/v2/storage/branch/{branch_ref}/tables/{safe_id}/definition",
             json=body,
         )
+        if clustering_set:
+            return self._wait_keeps_running(
+                response.json(),
+                budget=max_wait or STORAGE_JOB_MAX_WAIT,
+                operation="clustering change",
+                warning="; following the job is safe.",
+            )
         return self._wait_for_storage_job(response.json())
 
     def delete_table_metadata(

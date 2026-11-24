@@ -647,6 +647,8 @@ STORAGE_BRANCHES_FEATURE: str = "storage-branches"
 # stored description sent again) and for other validation failures, so the
 # code alone does not prove the request was a no-op.
 DEFINITION_VALIDATION_ERROR_CODE: str = "storage.tables.definitionUpdateValidationFailed"
+# Error `code` of the HTTP 422 Storage answers when it refuses a clustering change.
+CLUSTERING_UPDATE_NOT_ALLOWED_CODE: str = "storage.tables.clusteringUpdateNotAllowed"
 
 # --- Merge Requests (Branches 2.0) ---
 # Feature flag gating the non-SOX merge-request flow. Layer 3

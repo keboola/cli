@@ -398,3 +398,19 @@ kbagent storage job-detail --project prod --job-id <ID> --wait
 Then run step 3. Never re-issue the command: repeating a swap that already
 landed swaps the tables straight back, and repeating the create starts a
 second copy.
+
+## BigQuery clustering change in place
+
+*(since vNEXT)* When only the clustering of a typed BigQuery table changes, no
+copy and no swap are needed:
+
+```bash
+kbagent --json storage clustering-set --project prod --table-id in.c-main.events \
+  --clustering-field country --clustering-field city
+kbagent --json storage clustering-set --project prod --table-id in.c-main.events --clear
+kbagent --json storage table-detail --project prod --table-id in.c-main.events \
+  | jq '.data.definition.clustering'
+```
+
+BigQuery clusters data written after the change; existing rows keep their order
+until rewritten. To recluster all rows now, use the copy + swap path above.

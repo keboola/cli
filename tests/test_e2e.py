@@ -504,6 +504,13 @@ class TestFullE2E:
         )
         self._test_create_table_from_source(bucket_id, table_id)
 
+        _step(
+            "15.2",
+            "storage clustering-set",
+            "in-place BigQuery clustering change (backend-aware, DMD-3042)",
+        )
+        self._test_clustering_set(bucket_id, table_id)
+
         # ==============================================================
         # PHASE 4: Config operations (create via API, test via CLI)
         # ==============================================================
@@ -999,6 +1006,66 @@ class TestFullE2E:
             "The clustering layout applied by create-table is not readable on the "
             f"production name after the swap: {definition.get('clustering')!r}"
         )
+
+    def _test_clustering_set(self, bucket_id: str, table_id: str) -> None:
+        """storage clustering-set: set, repeat (unchanged), clear. BigQuery-only.
+
+        On any other backend Storage refuses the change with a 422, which
+        kbagent reports as INVALID_ARGUMENT (exit 2) keeping the Storage code.
+        """
+        detail = self._run_ok(
+            "storage", "bucket-detail", "--project", self.alias, "--bucket-id", bucket_id
+        )["data"]
+        backend = (detail.get("backend") or detail.get("sql_dialect") or "").lower()
+        set_args = (
+            "storage",
+            "clustering-set",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--clustering-field",
+            "id",
+            "--clustering-field",
+            "value",
+        )
+
+        if backend != "bigquery":
+            result = self._run(*set_args)
+            assert result.exit_code == 2, (
+                f"Expected exit 2 from the Storage refusal, got {result.exit_code}:\n{result.output}"
+            )
+            error = json.loads(result.output)["error"]
+            assert error["details"]["api_error_code"] == "storage.tables.clusteringUpdateNotAllowed"
+            return
+
+        def clustering() -> Any:
+            table = self._run_ok(
+                "storage", "table-detail", "--project", self.alias, "--table-id", table_id
+            )["data"]
+            return (table.get("definition") or {}).get("clustering")
+
+        updated = self._run_ok(*set_args)["data"]
+        assert updated["status"] == "updated"
+        assert updated["job_id"] is not None
+        assert (clustering() or {}).get("fields") == ["id", "value"]
+
+        repeated = self._run_ok(*set_args)["data"]
+        assert repeated["status"] == "unchanged"
+        assert repeated["job_id"] is None
+
+        cleared = self._run_ok(
+            "storage",
+            "clustering-set",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--clear",
+        )["data"]
+        assert cleared["status"] == "updated"
+        assert cleared["clustering"] is None
+        assert clustering() is None
 
     def _test_upload_table(self, table_id: str) -> None:
         """Upload CSV data to the table."""
@@ -6513,6 +6580,130 @@ class TestE2ENotificationSubscriptions:
                         "--yes",
                     )
 
+    def test_create_with_filter_then_clone_onto_another_config(self) -> None:
+        """``create --filter`` and ``clone --config-id`` round trip (issue #989).
+
+        Creates an overtime alert with a generic ``averageDuration>=60`` filter
+        on an inert address, clones it onto another configuration id, reads
+        both back, and deletes both. The config ids are arbitrary: a filter
+        value need not name an existing configuration.
+        """
+        marker = "-989f@example.com"
+        stale = self._payload("notification", "list", "--project", self.alias)
+        for row in stale["subscriptions"]:
+            if marker in (row.get("address") or ""):
+                with contextlib.suppress(Exception):
+                    self._run(
+                        "notification",
+                        "delete",
+                        "--project",
+                        self.alias,
+                        "--subscription-id",
+                        row["subscription_id"],
+                        "--yes",
+                    )
+
+        address = f"{RUN_ID}{marker}"
+        created_ids: list[str] = []
+        try:
+            _step(14, "notification create --filter")
+            created = self._payload(
+                "notification",
+                "create",
+                "--project",
+                self.alias,
+                "--event",
+                "job-processing-long",
+                "--channel",
+                "email",
+                "--address",
+                address,
+                "--component-id",
+                "keboola.flow",
+                "--config-id",
+                "989001",
+                "--overtime-percent",
+                "50",
+                "--filter",
+                "averageDuration>=60",
+            )
+            source_id = created["subscription_id"]
+            created_ids.append(source_id)
+            stored = {(f["field"], f.get("operator", "==")): f["value"] for f in created["filters"]}
+            assert str(stored[("averageDuration", ">=")]) == "60", created["filters"]
+            assert created["overtime_percent"] == 50
+            assert created["config_id"] == "989001"
+            source_branch = created["branch_id"]
+
+            _step(15, "notification clone --dry-run creates nothing")
+            before = {
+                row["subscription_id"]
+                for row in self._payload("notification", "list", "--project", self.alias)[
+                    "subscriptions"
+                ]
+            }
+            planned = self._payload(
+                "notification",
+                "clone",
+                "--project",
+                self.alias,
+                "--subscription-id",
+                source_id,
+                "--config-id",
+                "989002",
+                "--dry-run",
+            )
+            assert planned["dry_run"] is True
+            assert "new_subscription_id" not in planned
+            after = {
+                row["subscription_id"]
+                for row in self._payload("notification", "list", "--project", self.alias)[
+                    "subscriptions"
+                ]
+            }
+            assert after == before
+
+            _step(16, "notification clone --config-id")
+            cloned = self._payload(
+                "notification",
+                "clone",
+                "--project",
+                self.alias,
+                "--subscription-id",
+                source_id,
+                "--config-id",
+                "989002",
+            )
+            new_id = cloned["new_subscription_id"]
+            created_ids.append(new_id)
+            assert new_id != source_id
+            assert cloned["source_subscription_id"] == source_id
+
+            detail = self._payload(
+                "notification", "detail", "--project", self.alias, "--subscription-id", new_id
+            )
+            assert detail["event"] == "job-processing-long"
+            assert detail["config_id"] == "989002"
+            assert detail["component_id"] == "keboola.flow"
+            assert detail["overtime_percent"] == 50
+            assert detail["branch_id"] == source_branch
+            assert detail["address"] == address
+            fields = [f["field"] for f in detail["filters"]]
+            assert "averageDuration" in fields
+            assert fields.count("job.configuration.id") == 1
+        finally:
+            for leftover_id in created_ids:
+                with contextlib.suppress(Exception):
+                    self._run(
+                        "notification",
+                        "delete",
+                        "--project",
+                        self.alias,
+                        "--subscription-id",
+                        leftover_id,
+                        "--yes",
+                    )
+
 
 # ---------------------------------------------------------------------------
 # Job run variable values resolution
@@ -7300,14 +7491,16 @@ class TestE2EFlowOperations:
         cf_file = self._write_cf(tmp_path)
 
         _step(2, "flow validate (semantic-only, no --project) -- structural skipped note")
-        result = self._run("flow", "validate", "--file", f"@{cf_file}")
+        result = self._run("flow", "validate", "--definition-file", str(cf_file))
         assert result.exit_code == 0, result.output
         payload = json.loads(result.output)["data"]
         assert payload["valid"] is True
         assert any("structural schema validation skipped" in n for n in payload.get("notes", []))
 
         _step(2.1, "flow validate --project -- fetch live schema, full validation")
-        result = self._run("flow", "validate", "--file", f"@{cf_file}", "--project", self.alias)
+        result = self._run(
+            "flow", "validate", "--definition-file", str(cf_file), "--project", self.alias
+        )
         # Skip cleanly if the project has conditional flows disabled.
         if result.exit_code != 0 and "conditional" in result.output.lower():
             pytest.skip("Project reports conditional_flows=false; skipping CF E2E")
@@ -7331,8 +7524,8 @@ class TestE2EFlowOperations:
             f"{RUN_ID}-flow",
             "--description",
             "E2E flow test",
-            "--file",
-            f"@{cf_file}",
+            "--definition-file",
+            str(cf_file),
         )
         # Skip cleanly if the project has conditional flows disabled.
         if result.exit_code != 0 and "conditional" in result.output.lower():
@@ -7366,6 +7559,104 @@ class TestE2EFlowOperations:
         assert detail["id"] == flow_id
         assert detail["component_id"] == "keboola.flow"
         assert "phase_count" in detail
+
+        _step(5.1, "flow run --dry-run -- partial selection, no job created")
+        data = self._run_ok(
+            "flow",
+            "run",
+            "--project",
+            self.alias,
+            "--flow-id",
+            flow_id,
+            "--from-phase-id",
+            "p1",
+            "--dry-run",
+        )
+        assert data["data"]["dry_run"] is True
+        assert data["data"]["partial"] is True
+        assert data["data"]["selection"]["task_ids"] == ["t1"]
+        assert "PARTIAL_RUN_IGNORES_CONDITIONS" in [w["code"] for w in data["warnings"]]
+
+        _step(5.2, "flow run --task-id ' ' -- blank selector is exit 2, never a whole-flow run")
+        result = self._run(
+            "flow", "run", "--project", self.alias, "--flow-id", flow_id, "--task-id", " "
+        )
+        assert result.exit_code == 2, result.output
+
+        _step(5.3, "flow run --task-id --wait -- LIVE partial run of variable tasks only")
+        # The flow above points its task at a placeholder config, so it must
+        # never run. This flow has two phases with one `variable` task each:
+        # no component job, no credits. Only the p2 task is selected.
+        var_file = tmp_path / "cf-variables.yaml"
+        var_file.write_text(
+            "phases:\n"
+            '  - id: "p1"\n'
+            '    name: "P1"\n'
+            "    next:\n"
+            '      - id: "to-p2"\n'
+            '        goto: "p2"\n'
+            '  - id: "p2"\n'
+            '    name: "P2"\n'
+            "    next:\n"
+            '      - id: "end"\n'
+            "        goto: null\n"
+            "tasks:\n"
+            '  - id: "v1"\n'
+            '    name: "V1"\n'
+            '    phase: "p1"\n'
+            "    enabled: true\n"
+            "    task:\n"
+            "      type: variable\n"
+            '      name: "e2e_first"\n'
+            '      value: "1"\n'
+            '  - id: "v2"\n'
+            '    name: "V2"\n'
+            '    phase: "p2"\n'
+            "    enabled: true\n"
+            "    task:\n"
+            "      type: variable\n"
+            '      name: "e2e_second"\n'
+            '      value: "2"\n',
+            encoding="utf-8",
+        )
+        var_flow = self._run_ok(
+            "flow",
+            "new",
+            "--project",
+            self.alias,
+            "--name",
+            f"{RUN_ID}-flow-partial-run",
+            "--description",
+            "E2E partial flow run (variable tasks only)",
+            "--definition-file",
+            str(var_file),
+        )["data"]
+        var_flow_id = var_flow["id"]
+        self._created_flows.append(("keboola.flow", var_flow_id))
+        result = self._run(
+            "flow",
+            "run",
+            "--project",
+            self.alias,
+            "--flow-id",
+            var_flow_id,
+            "--task-id",
+            "v2",
+            "--wait",
+            "--timeout",
+            "300",
+        )
+        assert result.exit_code == 0, result.output
+        run = json.loads(result.output)["data"]
+        assert run["partial"] is True
+        assert run["selection"]["task_ids"] == ["v2"]
+        assert run["failed_task_ids"] == []
+        assert [r["task_id"] for r in run["task_results"]] == ["v2"]
+        assert run["task_results"][0]["status"] == "success"
+        job = self._run_ok("job", "detail", "--project", self.alias, "--job-id", str(run["id"]))[
+            "data"
+        ]
+        assert job["onlyFlowTaskIds"] == ["v2"]
 
         _step(6, "flow update -- rename the flow")
         result = self._run(
@@ -7475,8 +7766,8 @@ class TestE2EFlowOperations:
             self.alias,
             "--name",
             f"{RUN_ID}-invalid",
-            "--file",
-            f"@{bad_file}",
+            "--definition-file",
+            str(bad_file),
         )
         assert result.exit_code != 0
         out = json.loads(result.output)
@@ -7507,8 +7798,8 @@ class TestE2EFlowOperations:
             f"{RUN_ID}-flow-ws",
             "--description",
             "E2E with-schedules test",
-            "--file",
-            f"@{cf_file}",
+            "--definition-file",
+            str(cf_file),
         )
         if result.exit_code != 0 and "conditional" in result.output.lower():
             pytest.skip("Project reports conditional_flows=false; skipping CF E2E")
@@ -7632,8 +7923,8 @@ class TestE2EScheduleOperations:
                 f"{RUN_ID}-sched-flow",
                 "--description",
                 "E2E schedule discovery fixture",
-                "--file",
-                f"@{cf_file}",
+                "--definition-file",
+                str(cf_file),
             ],
         )
         if flow_result.exit_code != 0 and "conditional" in flow_result.output.lower():

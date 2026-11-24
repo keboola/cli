@@ -126,6 +126,7 @@ class _QueueMixin(_CoreClient):
         mode: str = "run",
         branch_id: int | None = None,
         variable_values_id: str | None = None,
+        only_flow_task_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         """Create and run a Queue API job.
 
@@ -142,6 +143,11 @@ class _QueueMixin(_CoreClient):
                 ``keboola.variables`` config. When set, the Queue API binds
                 the row's values to the job's `{{ variable }}` placeholders.
                 Omit for configurations that have no linked variables.
+            only_flow_task_ids: keboola.flow only: run just these flow tasks
+                (``onlyFlowTaskIds``, what the UI's "Run selected tasks"
+                sends). Sent only when the list is non-empty, so every other
+                body stays byte-identical; ``flow run`` refuses an empty
+                selection before it gets here.
 
         Returns:
             Job dict from the Queue API.
@@ -161,6 +167,8 @@ class _QueueMixin(_CoreClient):
             body["configRowIds"] = config_row_ids
         if variable_values_id:
             body["variableValuesId"] = variable_values_id
+        if only_flow_task_ids:
+            body["onlyFlowTaskIds"] = list(only_flow_task_ids)
         response = self._queue_request("POST", "/jobs", json=body)
         return response.json()
 

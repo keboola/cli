@@ -54,9 +54,20 @@ Then **open a new shell** -- `uv tool update-shell` edits the persisted `PATH`, 
 & "C:\Program Files\Git\bin\bash.exe" -lc "curl -LsSf https://raw.githubusercontent.com/keboola/cli/main/install.sh | sh"
 ```
 
-**No Python on the machine?** Every release ships a self-contained binary -- download `keboola-cli2_<version>_windows_amd64.zip` of the newest release from the [releases page](https://github.com/keboola/cli/releases), unpack it, and put the folder on `PATH`. It carries its own interpreter, needs neither Python nor uv, and (since 0.79.0) will not try to self-update -- it tells you to re-download instead.
+**Smart App Control, WDAC or AppLocker blocks kbagent, or no Python on the machine?** Install the signed binary with WinGet:
 
-A note on package managers, so nobody loses an afternoon to it: there is **no WinGet package** -- nothing has been submitted to `microsoft/winget-pkgs` -- and the **Chocolatey package lags far behind** (`keboola-cli2` was still on 0.66.1 while the current release was 0.80.0). Check its version before trusting it, or just use one of the three paths above.
+```powershell
+winget install --id Keboola.KeboolaCLI2 -e
+```
+
+The uv install runs a `kbagent.exe` that uv builds on your machine and a Python that uv downloads. Neither is signed, so Windows 11 with Smart App Control on, and a WDAC or AppLocker policy, can refuse to run it ("An Application Control policy has blocked this file"). Every release also ships a self-contained binary with a Keboola Authenticode signature. It carries its own interpreter and needs neither Python nor uv. WinGet installs it for the current user and puts `kbagent` on `PATH`. `kbagent serve --ui` works in the binary since 1.4.0.
+
+The binary does not update itself. When a new version is out, it prints the command that updates it, here `winget upgrade Keboola.KeboolaCLI2`.
+
+The same binary is also available:
+
+- from Chocolatey: `choco install keboola-cli2`, updated with `choco upgrade keboola-cli2`.
+- as a zip: download `keboola-cli2_<version>_windows_amd64.zip` of the newest release from the [releases page](https://github.com/keboola/cli/releases), unpack it, and put the folder on `PATH`. To update, download the new archive.
 
 A fresh Windows install has no real Python either: `python` resolves to a Microsoft Store stub that only prints an ad for the Store, so a script that probes "is `python` on PATH?" will wrongly conclude yes. None of the paths above need Python on `PATH` -- uv brings its own.
 
@@ -311,6 +322,7 @@ kbagent flow        list | detail | schema | validate | new | update | delete | 
 kbagent storage     buckets | bucket-detail | create-bucket | delete-bucket
                     tables | table-detail | create-table | upload-table | download-table
                     delete-table | truncate-table | delete-column | swap-tables | clone-table
+                    clustering-set
                     describe-bucket | describe-table | describe-column | describe-batch
                     files | file-detail | file-upload | file-download | file-tag | file-delete
                     load-file | unload-table

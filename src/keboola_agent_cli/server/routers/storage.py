@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ...constants import FILE_DOWNLOAD_CHUNK_SIZE
 from ...services.base import resolve_fanout_aliases
@@ -122,6 +122,15 @@ class SwapTables(BaseModel):
     branch_id: int
     # `gt=0` + `allow_inf_nan=False` mirror the CLI guard, so a bad budget is
     # a 422 at the boundary rather than a ValueError raised from the service.
+    timeout: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+
+
+class TableClustering(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    clustering_fields: list[str] | None = None
+    clear: bool = False
+    branch_id: int | None = None
     timeout: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
 
@@ -480,6 +489,29 @@ def swap_tables(
         alias=project,
         table_id=table_id,
         target_table_id=body.target_table_id,
+        branch_id=body.branch_id,
+        dry_run=dry_run,
+        timeout=body.timeout,
+    )
+
+
+@router.put(
+    "/tables/{project}/{table_id:path}/clustering",
+    summary="Set or remove table clustering",
+)
+def set_table_clustering(
+    project: str,
+    table_id: str,
+    body: TableClustering,
+    dry_run: bool = False,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Change the clustering of a BigQuery table in place. Mirrors `kbagent storage clustering-set`."""
+    return registry.storage.set_table_clustering(
+        alias=project,
+        table_id=table_id,
+        fields=body.clustering_fields,
+        clear=body.clear,
         branch_id=body.branch_id,
         dry_run=dry_run,
         timeout=body.timeout,

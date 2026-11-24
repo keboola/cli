@@ -9,7 +9,7 @@ auth, and the concepts behind these routes live in
 [`web-server.md`](web-server.md); a running server serves the same spec
 interactively at `/docs` (Swagger) and `/openapi.json`.
 
-**274 operations** across **231 paths** and **34 routers**.
+**277 operations** across **234 paths** and **34 routers**.
 
 Paths are shown as the server registers them. Reaching them through the
 Node BFF (or single-process `--ui` mode) prefixes every path with `/api`.
@@ -167,7 +167,7 @@ Encrypt secret values for a specific project + component using the Keboola encry
 
 ## Data
 
-### `storage` (33 operations)
+### `storage` (34 operations)
 
 Buckets, tables, columns, files. Create, upload, download, describe, swap, delete. Mirrors `kbagent storage *`.
 
@@ -189,6 +189,7 @@ Buckets, tables, columns, files. Create, upload, download, describe, swap, delet
 | `DELETE` | `/storage/columns/{project}/{table_id}` | Delete table columns |
 | `POST` | `/storage/columns/{project}/{table_id}` | Add a table column |
 | `POST` | `/storage/tables/{project}/{table_id}/swap` | Swap two tables |
+| `PUT` | `/storage/tables/{project}/{table_id}/clustering` | Set or remove table clustering |
 | `POST` | `/storage/tables/{project}/{table_id}/pull` | Clone a table into a dev branch |
 | `POST` | `/storage/tables/{project}/{table_id}/snapshots` | Create a table snapshot |
 | `GET` | `/storage/snapshots/{project}/{table_id}` | List table snapshots |
@@ -253,7 +254,7 @@ Run components, inspect job history, terminate running jobs. Mirrors `kbagent jo
 | `POST` | `/jobs/{project}/terminate` | Terminate running jobs |
 | `GET` | `/jobs/{project}/{job_id}/stream` | Stream job status and logs (SSE) |
 
-### `flows` (12 operations)
+### `flows` (13 operations)
 
 Orchestrator and Flow CRUD, scheduling, run history. Mirrors `kbagent flow *`.
 
@@ -269,6 +270,7 @@ Orchestrator and Flow CRUD, scheduling, run history. Mirrors `kbagent flow *`.
 | `POST` | `/flows/{project}` | Create a new flow |
 | `GET` | `/flows/{project}/{config_id}/schedules` | List schedules for a flow |
 | `GET` | `/flows/{project}/{config_id}/triggers` | List every trigger kbagent can see |
+| `POST` | `/flows/{project}/{flow_id}/run` | Run a flow or a selection of its tasks |
 | `POST` | `/flows/{project}/{config_id}/schedule` | Set a cron schedule on a flow |
 | `DELETE` | `/flows/{project}/{config_id}/schedule` | Remove a flow schedule |
 
@@ -282,9 +284,9 @@ Cron-style schedules attached to flows / configurations. Mirrors `kbagent schedu
 | `GET` | `/schedules/find/query` | Search schedules by criteria |
 | `GET` | `/schedules/{project}/{schedule_id}` | Get schedule detail |
 
-### `notifications` (5 operations)
+### `notifications` (6 operations)
 
-Flow Notifications-tab recipients (Notification Service subscriptions) -- audit + write across projects. Mirrors `kbagent notification list|detail|create|delete|replace-recipient`.
+Flow Notifications-tab recipients (Notification Service subscriptions) -- audit + write across projects. Mirrors `kbagent notification list|detail|create|delete|replace-recipient|clone`.
 
 | Method | Path | Summary |
 |---|---|---|
@@ -293,6 +295,7 @@ Flow Notifications-tab recipients (Notification Service subscriptions) -- audit 
 | `DELETE` | `/notifications/{project}/{subscription_id}` | Delete a notification subscription |
 | `POST` | `/notifications/{project}` | Create a notification subscription |
 | `POST` | `/notifications/{project}/{subscription_id}/replace-recipient` | Replace a subscription's recipient |
+| `POST` | `/notifications/{project}/{subscription_id}/clone` | Create a subscription from an existing one |
 
 ### `data-apps` (19 operations)
 

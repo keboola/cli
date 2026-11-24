@@ -45,6 +45,10 @@ class ErrorCode(StrEnum):
     # A safety prompt in human mode without a terminal and without --yes
     # (spec S4, decision D6). Exit 2; the hint names --yes.
     CONFIRMATION_REQUIRED = "CONFIRMATION_REQUIRED"
+    # A Manage API token is needed and no source can supply one: no terminal
+    # to ask on, and KBC_MANAGE_API_TOKEN not allowed (#955). As a per-project
+    # failure of `project refresh` it aggregates to exit 1.
+    MANAGE_TOKEN_REQUIRED = "MANAGE_TOKEN_REQUIRED"
     MISSING_PARAMETER = "MISSING_PARAMETER"
     UNKNOWN_ERROR = "UNKNOWN_ERROR"
     # Per-project envelope fallback in multi-project commands: the operation
@@ -120,6 +124,10 @@ class ErrorCode(StrEnum):
     SYNC_LEGACY_BOUNDARY = "SYNC_LEGACY_BOUNDARY"
     COMPANION_UNREADABLE = "COMPANION_UNREADABLE"
     SYNC_LOCAL_FILE_INVALID = "SYNC_LOCAL_FILE_INVALID"
+    # `sync push` read a config's files while they were being edited (#827).
+    SYNC_LOCAL_FILE_CHANGED = "SYNC_LOCAL_FILE_CHANGED"
+    # Another kbagent run holds the sync directory's lock (#827 follow-up).
+    SYNC_DIRECTORY_BUSY = "SYNC_DIRECTORY_BUSY"
 
     # Encryption
     ENCRYPTION_FAILED = "ENCRYPTION_FAILED"
@@ -322,6 +330,20 @@ class SyncConflictError(Exception):
         self.error_code = ErrorCode.SYNC_CONFLICT
 
 
+class SyncInitError(Exception):
+    """``sync pull`` could not initialize a directory that had no manifest yet.
+
+    Raised by the auto-init that runs inside pull's directory lock; the
+    command reports it as ``INIT_ERROR`` and ``--all-projects`` reports the
+    underlying error (``cause``), as before the init moved into the service.
+    """
+
+    def __init__(self, cause: Exception) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        self.message = str(cause)
+
+
 class PermissionDeniedError(Exception):
     """Raised when an operation is blocked by the permission policy."""
 
@@ -431,6 +453,8 @@ ERROR_CODE_TABLE: dict[str, ErrorClass] = {
     ErrorCode.USAGE_ERROR: ErrorClass("validation", 2),
     # A safety prompt nobody can answer: refused by us before any API call (S4).
     ErrorCode.CONFIRMATION_REQUIRED: ErrorClass("validation", 2),
+    # Like CONFIRMATION_REQUIRED: something only a human (or an opt-in flag) can supply.
+    ErrorCode.MANAGE_TOKEN_REQUIRED: ErrorClass("validation", 2),
     ErrorCode.MISSING_PARAMETER: ErrorClass("validation", 2),
     ErrorCode.UNKNOWN_ERROR: ErrorClass("api", 1),
     ErrorCode.UNEXPECTED_ERROR: ErrorClass("api", 1),
@@ -493,6 +517,8 @@ ERROR_CODE_TABLE: dict[str, ErrorClass] = {
     ErrorCode.SYNC_LEGACY_BOUNDARY: ErrorClass("conflict", 1),
     ErrorCode.COMPANION_UNREADABLE: ErrorClass("conflict", 1),
     ErrorCode.SYNC_LOCAL_FILE_INVALID: ErrorClass("validation", 1),
+    ErrorCode.SYNC_LOCAL_FILE_CHANGED: ErrorClass("conflict", 1),
+    ErrorCode.SYNC_DIRECTORY_BUSY: ErrorClass("conflict", 1),
     # Encryption
     ErrorCode.ENCRYPTION_FAILED: ErrorClass("api", 1),
     # Job / queue: local --timeout elapsed and the remote job was cancelled.
