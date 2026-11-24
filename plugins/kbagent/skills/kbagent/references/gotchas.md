@@ -6521,12 +6521,10 @@ the web UI.
 
   `data-app deploy` pins the LATEST config version, so the plain form is
   correct here -- do not pass `--config-version`.
-- **Not gated on any project feature.** The `data-apps-storage-workspace`
-  project flag is being enabled everywhere and then removed, so the config
-  option is the sole control. kbagent deliberately does **not** implement
-  MCP's legacy fallback of injecting `WORKSPACE_ID` through
-  `parameters.dataApp.secrets` (`keboola-mcp-server` still does that when the
-  feature is off) -- do not add it, and do not expect to see it.
+- **Not gated on any project feature.** The config option is the sole
+  control. kbagent deliberately does **not** implement MCP's legacy fallback
+  of injecting `WORKSPACE_ID` through `parameters.dataApp.secrets` -- do not
+  add it, and do not expect to see it.
 - **`--json` reports it:** the create envelope gains a `workspace` boolean,
   and the human output prints the Storage-access state on every create --
   loudly when it is off. The REST surface mirrors the flag as
@@ -7978,6 +7976,28 @@ the same way. Now a dev branch id is sent as a string (`"branchId": "12345"`);
 production and `--branch 0` stay `null`. The `--dry-run` body of `data-app
 create` shows the same string. On an older version, create the app in
 production or in the Keboola UI.
+
+## `--import-method` chooses how a Snowflake import writes the table
+
+*(since vNEXT)*
+
+`storage upload-table` and `storage load-file` take `--import-method auto|single_statement|multi_statement`
+(serve: `import_method` on the upload form and the load-to-table body). `auto`, the default, sends
+nothing and keeps the platform default. Details and the output-mapping key `import_method`:
+`import-method-workflow.md`.
+
+- **Snowflake only.** Another value than `auto` on a table of another backend is `INVALID_ARGUMENT`,
+  exit 2 (HTTP 400 over serve), and nothing is imported. Run the import again without the option.
+- **`upload-table` refuses before it writes.** It reads the bucket's backend first (for a bucket it
+  would auto-create: the project's default backend), so nothing is created or uploaded. A failed read
+  (403, or 404 with `--no-auto-create`) never stops the upload. Only when no
+  backend can be read does Storage refuse the import itself (HTTP 400
+  `storage.tables.importMethodNotSupported`); the file is then already in Storage, and the error names
+  the `storage load-file` command that imports it without the method and any bucket or table it
+  auto-created. `load-file` relies on that 400 (it writes nothing before the import).
+- **The result echoes what you asked for, not what ran.** `import_method` in the result is the
+  requested value. The `tableImportDone` event of the table has the method Storage used
+  (`importMethod`) and why (`importMethodSource`: `request`, `projectFeature` or `default`).
 
 ## `semantic-layer edit` overwrote a concurrent change to another field
 

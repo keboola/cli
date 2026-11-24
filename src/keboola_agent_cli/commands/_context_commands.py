@@ -1306,7 +1306,8 @@ Browse and manage storage buckets, tables, and files
 
   kbagent storage load-file [--project PROJECT] --file-id N --table-id ID
       [--incremental] [--delimiter DELIMITER] [--enclosure ENCLOSURE]
-      [--branch N] [--wait/--no-wait] [--timeout N]
+      [--branch N] [--import-method auto|single_statement|multi_statement]
+      [--wait/--no-wait] [--timeout N]
     Load a Storage File into a table.
 
   kbagent storage snapshot-create [--project PROJECT] --table-id ID
@@ -1352,8 +1353,9 @@ Browse and manage storage buckets, tables, and files
 
   kbagent storage upload-table [--project PROJECT] --table-id ID --file PATH
       [--incremental] [--delimiter DELIMITER] [--enclosure ENCLOSURE]
-      [--auto-create/--no-auto-create] [--branch N] [--wait/--no-wait]
-      [--timeout N] [--progress]
+      [--auto-create/--no-auto-create] [--branch N]
+      [--import-method auto|single_statement|multi_statement]
+      [--wait/--no-wait] [--timeout N] [--progress]
     Upload a CSV (or gzipped CSV) file into a storage table.
 """,
     "stream": """\
