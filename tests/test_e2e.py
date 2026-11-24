@@ -9962,30 +9962,34 @@ class TestE2EDataAppLifecycle:
             )
         )["data"]
         self._created_app_ids.append(created["app_id"])
-        target = ["--project", self.alias, "--config-id", created["config_id"]]
+        target = ["--project", self.alias, "--app-id", created["app_id"]]
         draft = _json_ok(
             _invoke(
                 self.config_dir,
                 ["--json", "data-app", "draft-create", *target, "--git-branch", "main"],
             )
         )["data"]["draft"]
-        target.extend(["--draft-id", draft["draft_id"]])
+        draft_target = [*target, "--draft-id", draft["draft_id"]]
         try:
             assert draft["url"], "Draft did not receive a URL"
+            listed = _json_ok(
+                _invoke(self.config_dir, ["--json", "data-app", "draft-list", *target])
+            )
+            assert any(item["draft_id"] == draft["draft_id"] for item in listed["data"]["drafts"])
             # The normal E2E wrapper prints response summaries; don't use it for the link.
             with patch(
                 "keboola_agent_cli.cli.ConfigStore",
                 return_value=ConfigStore(config_dir=self.config_dir),
             ):
-                preview = runner.invoke(app, ["--json", "data-app", "preview-link", *target])
+                preview = runner.invoke(app, ["--json", "data-app", "preview-link", *draft_target])
             assert preview.exit_code == 0, "Preview link could not be minted"
             data = json.loads(preview.output)["data"]
-            assert set(data) == {"url", "link_expires_at"}
+            assert set(data) == {"url", "link_expires_at", "project_alias", "app_id"}
         finally:
             deleted = _json_ok(
-                _invoke(self.config_dir, ["--json", "data-app", "draft-delete", *target])
+                _invoke(self.config_dir, ["--json", "data-app", "draft-delete", *draft_target])
             )
-            assert deleted["data"]["response"] == "deleted"
+            assert deleted["data"]["deleted"] is True
 
     @skip_without_data_app_public
     def test_data_app_lifecycle_public(self) -> None:

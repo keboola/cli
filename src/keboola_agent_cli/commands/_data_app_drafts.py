@@ -4,6 +4,7 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.table import Table
 from rich.text import Text
 
 from ._helpers import _confirm_or_abort, get_formatter, get_service, handle_service_call
@@ -13,14 +14,15 @@ _DraftId = Annotated[
     str | None,
     typer.Option("--draft-id", help="Draft UUID. Omit only when targeting a legacy draft."),
 ]
+_AppId = Annotated[str, typer.Option("--app-id", help="Data app ID.")]
 
 
 def register_draft_commands(app: typer.Typer) -> None:
     @app.command("draft-create")
     def draft_create(
         ctx: typer.Context,
+        app_id: _AppId,
         project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
-        config_id: str = typer.Option(..., "--config-id", help="Production app Storage config ID."),
         git_branch: str = typer.Option(
             ..., "--git-branch", help="Existing branch on the app's Git remote."
         ),
@@ -28,7 +30,7 @@ def register_draft_commands(app: typer.Typer) -> None:
         """Start a python-js draft on a Git branch without deploying or affecting production."""
         service = get_service(ctx, "data_app_service")
         result = handle_service_call(
-            ctx, service.create_data_app_draft, project, config_id, git_branch
+            ctx, service.create_data_app_draft, project, app_id, git_branch
         )
 
         def render(console: Console, data: dict) -> None:
@@ -38,18 +40,44 @@ def register_draft_commands(app: typer.Typer) -> None:
             )
             if draft["url"]:
                 console.print(Text(draft["url"]))
-            if data["change_summary"]:
-                console.print(Text(data["change_summary"]))
+            else:
+                console.print(Text("The draft has no URL yet. Wait before minting a preview link."))
+
+        get_formatter(ctx).output(result, render)
+
+    @app.command("draft-list")
+    def draft_list(
+        ctx: typer.Context,
+        app_id: _AppId,
+        project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
+        limit: int | None = typer.Option(
+            None, "--limit", "-L", min=1, help="Maximum drafts to return."
+        ),
+    ) -> None:
+        """List the drafts of a data app."""
+        service = get_service(ctx, "data_app_service")
+        result = handle_service_call(
+            ctx, service.list_data_app_drafts, project, app_id, limit=limit
+        )
+
+        def render(console: Console, data: dict) -> None:
+            table = Table("Draft ID", "Git Branch", "State", "URL")
+            for draft in data["drafts"]:
+                table.add_row(
+                    *(
+                        Text(draft[key] or "")
+                        for key in ("draft_id", "git_branch", "run_state", "url")
+                    )
+                )
+            console.print(table)
 
         get_formatter(ctx).output(result, render)
 
     @app.command("draft-delete")
     def draft_delete(
         ctx: typer.Context,
+        app_id: _AppId,
         project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
-        config_id: str = typer.Option(
-            ..., "--config-id", help="Production app config ID, or legacy draft config ID."
-        ),
         draft_id: _DraftId = None,
         dry_run: bool = typer.Option(
             False, "--dry-run", help="Check the target without deleting it."
@@ -59,15 +87,11 @@ def register_draft_commands(app: typer.Typer) -> None:
         """Delete a draft without deleting its Git branch or production app."""
         formatter = get_formatter(ctx)
         service = get_service(ctx, "data_app_service")
-        label = (
-            f"draft {draft_id} of config {config_id}"
-            if draft_id
-            else f"legacy draft config {config_id}"
-        )
+        label = f"draft {draft_id} of app {app_id}" if draft_id else f"legacy draft app {app_id}"
         if not dry_run:
             _confirm_or_abort(formatter, yes, f"Delete {label}?")
         result = handle_service_call(
-            ctx, service.delete_data_app_draft, project, config_id, draft_id, dry_run=dry_run
+            ctx, service.delete_data_app_draft, project, app_id, draft_id, dry_run=dry_run
         )
         formatter.output(
             result,
@@ -79,16 +103,14 @@ def register_draft_commands(app: typer.Typer) -> None:
     @app.command("preview-link")
     def preview_link(
         ctx: typer.Context,
+        app_id: _AppId,
         project: str = typer.Option(None, "--project", "-p", help=PROJECT_HELP),
-        config_id: str = typer.Option(
-            ..., "--config-id", help="Production app config ID, or legacy draft config ID."
-        ),
         draft_id: _DraftId = None,
     ) -> None:
         """Mint a private, short-lived login link. Open it only in a browser; do not share it."""
         service = get_service(ctx, "data_app_service")
         result = handle_service_call(
-            ctx, service.get_data_app_preview_link, project, config_id, draft_id
+            ctx, service.get_data_app_preview_link, project, app_id, draft_id
         )
 
         def render(console: Console, data: dict) -> None:

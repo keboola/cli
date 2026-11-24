@@ -252,42 +252,51 @@ class DataAppDraftCreate(BaseModel):
     git_branch: str
 
 
-@router.post("/{project}/{config_id}/drafts", summary="Create a python-js data app draft")
+@router.get("/{project}/{app_id}/drafts", summary="List a data app's drafts")
+def draft_list(
+    project: str,
+    app_id: str,
+    limit: int | None = Query(None, ge=1),
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """List a data app's drafts. Mirrors `kbagent data-app draft-list`."""
+    return registry.data_app.list_data_app_drafts(project, app_id, limit=limit)
+
+
+@router.post("/{project}/{app_id}/drafts", summary="Create a python-js data app draft")
 def draft_create(
     project: str,
-    config_id: str,
+    app_id: str,
     body: DataAppDraftCreate,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """Start a draft on a Git branch. Mirrors `kbagent data-app draft-create`."""
-    return registry.data_app.create_data_app_draft(project, config_id, body.git_branch)
+    return registry.data_app.create_data_app_draft(project, app_id, body.git_branch)
 
 
-@router.delete("/{project}/{config_id}/drafts", summary="Delete a python-js data app draft")
+@router.delete("/{project}/{app_id}/drafts", summary="Delete a python-js data app draft")
 def draft_delete(
     project: str,
-    config_id: str,
+    app_id: str,
     draft_id: str | None = None,
     dry_run: bool = False,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
-    """Delete a draft by UUID, or a legacy draft by config ID if no UUID was given."""
-    return registry.data_app.delete_data_app_draft(project, config_id, draft_id, dry_run=dry_run)
+    """Delete a draft by UUID, or a legacy draft by app ID if no UUID was given."""
+    return registry.data_app.delete_data_app_draft(project, app_id, draft_id, dry_run=dry_run)
 
 
-@router.post(
-    "/{project}/{config_id}/preview-link", summary="Mint a short-lived data app preview link"
-)
+@router.post("/{project}/{app_id}/preview-link", summary="Mint a short-lived data app preview link")
 def preview_link(
     project: str,
-    config_id: str,
+    app_id: str,
     response: Response,
     draft_id: str | None = None,
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, str]:
     """Mint a browser-only login link. Mirrors `kbagent data-app preview-link`."""
     response.headers["Cache-Control"] = "no-store"
-    return registry.data_app.get_data_app_preview_link(project, config_id, draft_id)
+    return registry.data_app.get_data_app_preview_link(project, app_id, draft_id)
 
 
 @router.get(

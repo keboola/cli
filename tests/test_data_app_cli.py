@@ -94,6 +94,14 @@ def _invoke(
             {"dry_run": True},
         ),
         (
+            "draft-list",
+            ["-L", "1"],
+            "list_data_app_drafts",
+            (),
+            {"limit": 1},
+            {"app_id": "42", "project_alias": "prod", "drafts": [], "count": 0},
+        ),
+        (
             "preview-link",
             ["--draft-id", "demo"],
             "get_data_app_preview_link",
@@ -117,13 +125,13 @@ def test_draft_commands_json(
     handler = getattr(mock, method)
     handler.return_value = response
     result = _invoke(
-        ["--json", "data-app", command, "--project", "prod", "--config-id", "cfg", *flags],
+        ["--json", "data-app", command, "--app-id", "42", *flags],
         store=store,
         data_app_mock=mock,
     )
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)["data"] == response
-    handler.assert_called_once_with("prod", "cfg", *args, **kwargs)
+    handler.assert_called_once_with("prod", "42", *args, **kwargs)
 
 
 class TestDataAppList:

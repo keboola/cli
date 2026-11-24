@@ -41,11 +41,11 @@ generated, authoritative list).
 | `get_jobs` | `kbagent job list` | or `job detail` |
 | `run_job` | `kbagent job run` | add `--wait` to collect the result |
 | `create_oauth_url` | `kbagent config oauth-url` | |
-| `create_python_js_data_app_draft` | `kbagent data-app draft-create` | use the production app's `--config-id` and the existing `--git-branch` |
+| `create_python_js_data_app_draft` | `kbagent data-app draft-create` | use the production app's `--app-id` and the existing `--git-branch` |
 | `create_python_js_data_app_git_credential` | `kbagent data-app git-credentials-create` | |
-| `delete_python_js_data_app_draft` | `kbagent data-app draft-delete` | omit `--draft-id` only for a legacy draft configuration |
+| `delete_python_js_data_app_draft` | `kbagent data-app draft-delete` | use `--app-id`; find the UUID with `data-app draft-list`, or omit `--draft-id` for a legacy draft's own app ID |
 | `deploy_data_app` | `kbagent data-app deploy` | or `data-app stop` |
-| `get_data_app_preview_link` | `kbagent data-app preview-link` | opens a draft without login; use the link only in a browser before it expires |
+| `get_data_app_preview_link` | `kbagent data-app preview-link` | use `--app-id` and a `--draft-id` to open a draft without login; use the link only in a browser before it expires |
 | `get_data_apps` | `kbagent data-app list` | or `data-app detail` |
 | `modify_python_js_data_app` | `kbagent data-app create` | update via `config update` + `data-app secrets-set` |
 | `modify_streamlit_data_app` | `kbagent data-app create` | update via `config update` + `data-app secrets-set` |

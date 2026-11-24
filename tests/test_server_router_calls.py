@@ -538,20 +538,30 @@ def test_data_app_password_reveal_returns_the_password(tmp_path: Path) -> None:
 
 def test_data_app_draft_routes(tmp_path: Path) -> None:
     service = MagicMock()
+    service.list_data_app_drafts.return_value = {"drafts": [{"draft_id": "example"}]}
     service.create_data_app_draft.return_value = {"draft": {"draft_id": "example"}}
-    service.delete_data_app_draft.return_value = {"response": "deleted"}
+    service.delete_data_app_draft.return_value = {"deleted": True}
     service.get_data_app_preview_link.return_value = {"url": "https://example.test/#t=fake"}
     app = _make_app_with_registry(tmp_path, _mock_registry(data_app=service))
     with TestClient(app) as client:
-        root = f"/data-apps/{PROJECT}/cfg"
+        root = f"/data-apps/{PROJECT}/{APP_ID}"
+        listed = client.get(f"{root}/drafts", params={"limit": 1}, headers=AUTH)
         created = client.post(f"{root}/drafts", json={"git_branch": "feature"}, headers=AUTH)
         deleted = client.delete(f"{root}/drafts", params={"draft_id": "example"}, headers=AUTH)
         preview = client.post(f"{root}/preview-link", params={"draft_id": "example"}, headers=AUTH)
-    assert created.status_code == deleted.status_code == preview.status_code == 200
+    assert (
+        listed.status_code
+        == created.status_code
+        == deleted.status_code
+        == preview.status_code
+        == 200
+    )
+    assert listed.json() == {"drafts": [{"draft_id": "example"}]}
     assert preview.headers["Cache-Control"] == "no-store"
-    service.create_data_app_draft.assert_called_once_with(PROJECT, "cfg", "feature")
-    service.delete_data_app_draft.assert_called_once_with(PROJECT, "cfg", "example", dry_run=False)
-    service.get_data_app_preview_link.assert_called_once_with(PROJECT, "cfg", "example")
+    service.list_data_app_drafts.assert_called_once_with(PROJECT, APP_ID, limit=1)
+    service.create_data_app_draft.assert_called_once_with(PROJECT, APP_ID, "feature")
+    service.delete_data_app_draft.assert_called_once_with(PROJECT, APP_ID, "example", dry_run=False)
+    service.get_data_app_preview_link.assert_called_once_with(PROJECT, APP_ID, "example")
 
 
 # ---------------------------------------------------------------------------

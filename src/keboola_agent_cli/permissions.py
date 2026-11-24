@@ -236,6 +236,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     "data-app.delete": "destructive",
     "data-app.draft-create": "write",
     "data-app.draft-delete": "destructive",
+    "data-app.draft-list": "read",
     "data-app.preview-link": "write",
     # Data apps - secrets + validate-repo (new in 0.28.0)
     "data-app.secrets-set": "write",
