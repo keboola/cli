@@ -88,6 +88,9 @@ Read from the result:
   On an untyped table every column is STRING, so an untyped table is path B.
 - `column_details[].nullable`: whether each column accepts NULL. Record it
   per column. Section 5 compares it with the copy.
+- `column_details[].length`: the length of a column type, where it has one
+  (`100` of STRING(100), `38,9` of NUMERIC(38,9)). Record it per column.
+  Path B passes it to the copy, and section 5 compares it.
   A table that has any `column_details[].default` is path B as well, whatever
   the type of `COL` is (section 4, path A, "Column defaults").
 - `definition.timePartitioning`, `rangePartitioning`, `clustering`: the
@@ -280,6 +283,7 @@ primary_key:
 last_import_date:
 Columns and types:
 Nullable per column (column_details[].nullable):
+Length per column (column_details[].length):
 Current layout (timePartitioning / rangePartitioning / clustering):
 requirePartitionFilter (must be false):
 Column defaults (column_details[].default):
@@ -405,8 +409,11 @@ query to the owner. No table is created. Delete the helper workspace (the
 
 #### 4b. Create the empty typed table with the layout
 
-Every column keeps its type from `column_details`. On an untyped table every
-column is `STRING`. `COL` becomes `DATE`. NOT NULL and the primary key are the
+Every column keeps its type from `column_details`, with its length: a column
+recorded with a `length` in section 1 is passed as `--column NAME:TYPE(length)`,
+for example `--column NAME:STRING(100)` or `--column AMOUNT:NUMERIC(38,9)`. A
+bare `--column NAME:STRING` creates the column without the length limit of the
+source. On an untyped table every column is `STRING`. `COL` becomes `DATE`. NOT NULL and the primary key are the
 same as on the source: pass one `--not-null-column` for every column recorded
 with `nullable: false` in section 1. Every column default recorded in section 1
 (`column_details[].default`) is repeated with `--default name=value`: the copy
@@ -415,7 +422,7 @@ insert that omits it, or fails its NOT NULL constraint.
 
 ```bash
 kbagent --json storage create-table --project ALIAS --bucket-id B --name T_repart \
-  --column PK:STRING --column COL:DATE --column C1:STRING --column OTHER:STRING \
+  --column "PK:STRING(64)" --column COL:DATE --column C1:STRING --column OTHER:STRING \
   --primary-key PK --not-null-column PK --default OTHER=0 \
   --time-partitioning-type DAY --time-partitioning-field COL --clustering-field C1
 ```
@@ -549,6 +556,10 @@ helper workspace.
   write landed.
 - **Columns and types.** The column list and the types are equal. Path B:
   only `COL` differs, and it is `DATE`.
+- **Length.** `column_details[].length` of each column equals the value
+  recorded for `B.T` in section 1. A column that has a length on one table
+  and none, or another one, on the other table is a mismatch. Path B with a
+  type change: `COL` is left out, because its type changes.
 - **Nullability.** `column_details[].nullable` of each column equals the
   value recorded for `B.T` in section 1. A column that is NOT NULL on one
   table and nullable on the other is a mismatch: after the swap the table
