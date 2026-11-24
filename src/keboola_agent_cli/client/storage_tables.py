@@ -21,6 +21,7 @@ from ..constants import (
     STORAGE_JOB_MAX_WAIT,
 )
 from ..errors import ErrorCode, KeboolaApiError, request_outcome_unknown
+from ..models import ImportMethod
 from ._core import _CoreClient
 from ._s3_multipart import (
     S3Target,
@@ -835,6 +836,7 @@ class _StorageTablesMixin(_CoreClient):
         *,
         wait: bool = True,
         max_wait: float | None = None,
+        import_method: str = ImportMethod.auto,
     ) -> dict[str, Any]:
         """Trigger async import of a pre-uploaded file into a table (step 3).
 
@@ -853,6 +855,9 @@ class _StorageTablesMixin(_CoreClient):
                 already be terminal); follow it with :meth:`get_storage_job`.
             max_wait: Seconds to poll when ``wait`` is True. ``None`` means
                 ``IMPORT_JOB_MAX_WAIT``.
+            import_method: A :class:`ImportMethod` value. ``auto`` sends no
+                ``importMethod`` (the platform default); any other value is
+                sent as-is and Storage rejects it on a non-Snowflake table.
 
         Returns:
             The import job dict -- terminal when ``wait`` is True.
@@ -874,6 +879,8 @@ class _StorageTablesMixin(_CoreClient):
             "delimiter": delimiter,
             "enclosure": enclosure,
         }
+        if import_method != ImportMethod.auto:
+            body["importMethod"] = ImportMethod(import_method).value
         try:
             response = self._request("POST", f"{prefix}/tables/{safe_id}/import-async", data=body)
         except KeboolaApiError as exc:
@@ -943,6 +950,7 @@ class _StorageTablesMixin(_CoreClient):
         wait: bool = True,
         max_wait: float | None = None,
         on_progress: Callable[[int, int], None] | None = None,
+        import_method: str = ImportMethod.auto,
     ) -> dict[str, Any]:
         """Upload a CSV file into an existing table; return the job ``results``.
 
@@ -962,6 +970,7 @@ class _StorageTablesMixin(_CoreClient):
             wait=wait,
             max_wait=max_wait,
             on_progress=on_progress,
+            import_method=import_method,
         )
         return outcome.job.get("results") or {}
 
@@ -977,6 +986,7 @@ class _StorageTablesMixin(_CoreClient):
         wait: bool = True,
         max_wait: float | None = None,
         on_progress: Callable[[int, int], None] | None = None,
+        import_method: str = ImportMethod.auto,
     ) -> TableUploadOutcome:
         """Upload a CSV file into an existing table; return file ID and job.
 
@@ -998,16 +1008,21 @@ class _StorageTablesMixin(_CoreClient):
                 ``IMPORT_JOB_MAX_WAIT``).
             on_progress: Called with ``(bytes_sent, total_bytes)`` during the
                 cloud upload.
+            import_method: See :meth:`import_table_async`.
 
         Returns:
             :class:`TableUploadOutcome` -- the Storage file ID and the import job.
 
         Raises:
+            ValueError: ``import_method`` is not an :class:`ImportMethod`
+                value; raised before any request.
             KeboolaApiError: Any failure after the cloud upload carries
                 ``details["file_id"]`` so the file can be imported without
                 re-uploading. The message carries no recovery sentence: the
                 caller adds its own (see ``services._storage_jobs.with_import_hint``).
         """
+        # Checked before the upload: an unknown value must not cost a full upload.
+        import_method = ImportMethod(import_method)
         p = Path(file_path)
         size_bytes = p.stat().st_size
         upload_info = self.prepare_file_upload(name=p.name, size_bytes=size_bytes)
@@ -1022,6 +1037,7 @@ class _StorageTablesMixin(_CoreClient):
                 enclosure=enclosure,
                 branch_id=branch_id,
                 wait=False,
+                import_method=import_method,
             )
         except KeboolaApiError as exc:
             if exc.details.get("import_may_be_running"):
