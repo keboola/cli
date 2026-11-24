@@ -308,7 +308,7 @@ class TestAddColumnService:
         mock_client.get_table_detail.return_value = {"id": "out.c-b.t", "isTyped": False}
         service = _make_service(_make_store(tmp_path), mock_client)
 
-        with pytest.raises(ValueError, match="is untyped"):
+        with pytest.raises(KeboolaApiError, match="is untyped") as exc_info:
             service.add_column(
                 alias="test",
                 table_id="out.c-b.t",
@@ -317,6 +317,8 @@ class TestAddColumnService:
                 default=default,
             )
 
+        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
+        assert exc_info.value.status_code == 400
         mock_client.add_column.assert_not_called()
         mock_client.close.assert_called_once()
 

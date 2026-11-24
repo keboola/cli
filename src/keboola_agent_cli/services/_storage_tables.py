@@ -255,14 +255,20 @@ def add_column_definition(
     ``default`` is refused before the request.
 
     Raises:
-        ValueError: the table is untyped and the spec carries a type,
-            ``not_null`` or ``default``.
+        KeboolaApiError: ``INVALID_ARGUMENT`` (HTTP 400 over ``kbagent serve``)
+            when the table is untyped and the spec carries a type, ``not_null``
+            or ``default``.
     """
     if table.get("isTyped"):
         return parsed["definition"]
     if ":" in column or not_null or default is not None:
-        raise ValueError(
-            f"Table {table.get('id')!r} is untyped: add the column by name only "
-            f"(--column {parsed['name']}), without a type, --not-null or --default."
+        raise KeboolaApiError(
+            message=(
+                f"Table {table.get('id')!r} is untyped: add the column by name only "
+                f"(--column {parsed['name']}), without a type, --not-null or --default."
+            ),
+            status_code=400,
+            error_code=ErrorCode.INVALID_ARGUMENT,
+            retryable=False,
         )
     return None
