@@ -7,10 +7,11 @@ Storage's ``import-async`` takes ``importMethod`` (``auto`` |
   value is sent as-is, an unknown value fails before any request;
 - pre-flight: an explicit method reads the bucket's backend (or the project
   default for a bucket upload-table would create) and is refused before any
-  write; ``auto`` reads nothing; the SDK facade does the same;
-- service: the 400 ``storage.tables.importMethodNotSupported`` (explicit
-  method on a non-Snowflake table) becomes ``INVALID_ARGUMENT`` naming the
-  option, keeps its details, and its ``load-file`` recovery drops the method;
+  write; ``auto`` reads nothing; the SDK facade does the same; a brace in the
+  table ID is message text;
+- service and SDK: the 400 ``storage.tables.importMethodNotSupported``
+  (explicit method on a non-Snowflake table) becomes ``INVALID_ARGUMENT``
+  naming the option, keeps its details, and its recovery drops the method;
   other failures repeat the method in the recovery command;
 - CLI: the option reaches the service, an unknown value is a usage error;
 - serve: the upload form field and the load-to-table body field.
@@ -343,6 +344,24 @@ class TestPreflight:
         # The bucket read is the only request: no create, no prepare, no import.
         assert [r.method for r in httpx_mock.get_requests()] == ["GET"]
 
+    @pytest.mark.parametrize("table_id", ["in.c-b.us{er}s", "in.c-b.t{"])
+    def test_braces_in_the_table_id_are_text(self, httpx_mock, tmp_path: Path, table_id) -> None:
+        httpx_mock.add_response(
+            url=_BUCKET_URL, method="GET", json={"id": "in.c-b", "backend": "BigQuery"}
+        )
+        service = _real_client_service(tmp_path)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            service.upload_table(
+                alias="test",
+                table_id=table_id,
+                file_path=str(_csv(tmp_path)),
+                import_method="single_statement",
+            )
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.INVALID_ARGUMENT
+        assert f"table {table_id} is in bucket in.c-b on the bigquery backend" in exc.message
+        assert [r.method for r in httpx_mock.get_requests()] == ["GET"]
+
     def test_missing_bucket_uses_the_project_default_backend(
         self, httpx_mock, tmp_path: Path
     ) -> None:
@@ -532,6 +551,42 @@ class TestSdkFacade:
         kc.verify_token.assert_not_called()
         kwargs = kc.upload_table_with_outcome.call_args.kwargs
         assert kwargs["import_method"] is ImportMethod.single_statement
+
+    def _storage_refusal(self) -> KeboolaApiError:
+        return KeboolaApiError(
+            "Import method is supported only on the Snowflake backend",
+            status_code=400,
+            error_code=ErrorCode.API_ERROR,
+            details={
+                "api_error_code": "storage.tables.importMethodNotSupported",
+                "api_error_params": {"backend": "bigquery"},
+                "file_id": 100,
+            },
+        )
+
+    def test_storage_refusal_is_invalid_argument(self, tmp_path: Path) -> None:
+        kc = MagicMock()
+        kc.get_bucket_detail.return_value = {"id": "in.c-b"}
+        kc.upload_table_with_outcome.side_effect = self._storage_refusal()
+        with pytest.raises(KeboolaApiError) as exc_info:
+            self._client(kc).upload_table(_TABLE, _csv(tmp_path), import_method="single_statement")
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.INVALID_ARGUMENT
+        assert exc.status_code == 400
+        assert exc.retryable is False
+        assert exc.details["file_id"] == 100
+        assert exc.details["api_error_code"] == "storage.tables.importMethodNotSupported"
+        assert "on the bigquery backend" in exc.message
+        assert "without the import_method argument" in exc.message
+        assert "--import-method" not in exc.message
+        assert "uploaded as Storage file 100" in exc.message
+
+    def test_storage_refusal_with_auto_stays_an_api_error(self, tmp_path: Path) -> None:
+        kc = MagicMock()
+        kc.upload_table_with_outcome.side_effect = self._storage_refusal()
+        with pytest.raises(KeboolaApiError) as exc_info:
+            self._client(kc).upload_table(_TABLE, _csv(tmp_path))
+        assert exc_info.value.error_code == ErrorCode.API_ERROR
 
     def test_default_reads_no_backend(self, tmp_path: Path) -> None:
         kc = MagicMock()
