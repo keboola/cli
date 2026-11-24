@@ -5,6 +5,10 @@ every section are in [../SKILL.md](../SKILL.md), "Guardrails": every write
 waits for an explicit yes, `--json` on every call, a timeout is never answered
 with a re-run, a person runs every `bq` command that writes.
 
+A cluster-only table that is converted in place is the exception: it runs
+section 0 and then section 4C, and skips sections 1 to 4d and 5 to 10.
+Section 4C holds its own preflight, verification and rollback.
+
 Two kinds of people act in this runbook:
 
 - **The operator** follows the runbook, runs the kbagent commands, and has
@@ -257,8 +261,10 @@ Replace it in every query of this runbook:
 
 For a STRING column run the profile query of section 4a first.
 
-A cluster-only table skips the query, but it still creates the workspace and
-loads the view: sections 3 and 5 count rows through it.
+A cluster-only table that goes through copy and swap skips the query, but it
+still creates the workspace and loads the view: sections 3 and 5 count rows
+through it. A cluster-only table converted in place skips sections 1 to 4d
+and creates no workspace (section 4C).
 
 From here on the workspace `WS_ID` exists. Every stop before the copy
 (section 2, section 4a) ends with its deletion:
@@ -356,6 +362,113 @@ command of section 1) and record both, as a second signal only.
 
 ## 4. Copy
 
+A cluster-only table that is converted in place is not copied. It uses
+section 4C below and skips the rest of this section.
+
+### 4C. Cluster only: change the clustering in place
+
+*(since vNEXT)* `kbagent storage clustering-set` changes the clustering of
+the table itself. This is the default path of a cluster-only table.
+
+**When.** The table needs clustering columns and no partitioning change: no
+time or range partitioning is requested, or the partitioning stays as it is.
+The class of the table is "Cluster only" ([../SKILL.md](../SKILL.md)).
+
+**What it does not need.** There is no copy, no swap and no old table to keep
+for 7 days. The writers are not paused. The table keeps its ID and its data,
+so its IAM bindings, row access policies, search indexes, policy tags and
+aliases stay on the same table. No `bq` step is needed.
+
+**Trade-off.** BigQuery clusters the data that is written after the change.
+The rows that are already in the table keep their order until they are
+rewritten, for example by a full load. Tell the owner before the change.
+When the owner wants every existing row reclustered at once, use copy and
+swap instead: sections 1 to 10, with path A without the partitioning flags.
+
+**Availability.** Check that the installed kbagent has the command:
+
+```bash
+kbagent storage clustering-set --help
+```
+
+When this fails (exit 2, no such command), the kbagent is older than the
+release that ships the command. Tell the operator, and fall back to copy and
+swap: sections 1 to 10, with path A without the partitioning flags.
+
+**Preflight.** Nothing here writes. Section 0 still applies: no dev branch is
+active for the project.
+
+```bash
+kbagent --json storage table-detail --project ALIAS --table-id B.T \
+  | jq '.data | (.definition | if type=="object" then . else {} end) as $d | {is_alias, sql_path, column_details, layout: ($d | {timePartitioning, rangePartitioning, clustering})}'
+kbagent --json storage bucket-detail --project ALIAS --bucket-id B
+```
+
+- `is_alias` is true: stop. An alias has no clustering of its own. Run this
+  section on the source table of the alias, in the project that owns it.
+- `is_linked` of the bucket is true, or the bucket is an external bucket:
+  stop. The table belongs to another project or to a dataset outside
+  Storage. The owner of the source changes the clustering there.
+- `C1`, `C2` must be columns of the table (`column_details[].name`), at most
+  4, in the order that the owner confirmed.
+- Record `layout.clustering`: the current clustering columns in order
+  (`clustering.fields`), or none. This is the value for the rollback.
+- `layout.timePartitioning` and `layout.rangePartitioning` stay as they are.
+  The command does not change them.
+
+**Dry run, then the change.** The dry run writes nothing:
+
+```bash
+kbagent --json storage clustering-set --project ALIAS --table-id B.T \
+  --clustering-field C1 --clustering-field C2 --dry-run
+```
+
+Check in the result that `clustering_before` equals the recorded clustering
+and that `clustering` lists the requested columns in order. Show it to the
+owner. After the owner's yes:
+
+```bash
+kbagent --json storage clustering-set --project ALIAS --table-id B.T \
+  --clustering-field C1 --clustering-field C2
+```
+
+- `status` is `updated`: the job ran and the clustering is set.
+- `status` is `unchanged`: the table already had the requested clustering,
+  and nothing was written.
+- Exit 2 with `INVALID_ARGUMENT`: Storage refused the change (not a BigQuery
+  table, an alias, an external bucket, an unknown column, a column twice, or
+  more than 4 columns). The table is unchanged. Stop and report the message.
+- Exit 4 with `STORAGE_JOB_TIMEOUT`: the job still runs. Wait for it with
+  the `storage job-detail --wait` command of path A below, then verify.
+
+**Verify.**
+
+```bash
+kbagent --json storage table-detail --project ALIAS --table-id B.T \
+  | jq '.data.definition | {timePartitioning, rangePartitioning, clustering}'
+```
+
+`clustering.fields` lists the requested columns in order, and the
+partitioning equals the recorded one. Record the clustering before and
+after.
+
+**Rollback.** Set the recorded previous clustering, with `P1`, `P2` as the
+recorded columns in their order. When the table had no clustering before,
+remove it with `--clear`. Each is a write and waits for a yes:
+
+```bash
+kbagent --json storage clustering-set --project ALIAS --table-id B.T \
+  --clustering-field P1 --clustering-field P2
+kbagent --json storage clustering-set --project ALIAS --table-id B.T --clear
+```
+
+Run one of the two, then verify as above. A rollback has the same
+trade-off: rows that were written under the new clustering keep their order
+until they are rewritten.
+
+The run of a cluster-only table converted in place ends here. It skips
+sections 4c to 10.
+
 ### Path A: the partition column is DATE, DATETIME or TIMESTAMP, or cluster only
 
 ```bash
@@ -365,7 +478,9 @@ kbagent --json storage create-table --project ALIAS --bucket-id B --name T_repar
 ```
 
 Use the granularity of section 2. For a cluster-only table omit both
-`--time-partitioning-*` flags.
+`--time-partitioning-*` flags. A cluster-only table takes this path only when
+the owner wants the existing rows reclustered at once, or when the installed
+kbagent has no `storage clustering-set` (section 4C).
 
 The copy keeps the columns, their types and NOT NULL of the source. It keeps
 the primary key that the command requests.
@@ -572,7 +687,9 @@ bq --project_id=GCP_PROJECT get-iam-policy --format=prettyjson DATASET.T_repart
 ```
 
 Tables over 5 TiB, and every path B table, also get a row count per
-partition. A cluster-only table has no partitions and skips it.
+partition. A cluster-only table that was copied has no partitions and skips
+it. A cluster-only table converted in place skips sections 4c to 10
+(section 4C).
 
 ```bash
 kbagent --json workspace query --project ALIAS --workspace-id WS_ID --full --sql "SELECT p, SUM(old_c) AS old_rows, SUM(new_c) AS new_rows FROM (SELECT PART_OLD AS p, COUNT(*) AS old_c, 0 AS new_c FROM T GROUP BY p UNION ALL SELECT PART_NEW AS p, 0 AS old_c, COUNT(*) AS new_c FROM T_repart GROUP BY p) GROUP BY p HAVING SUM(old_c) != SUM(new_c)"

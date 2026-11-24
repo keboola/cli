@@ -3,7 +3,8 @@ name: kbagent-bigquery-repartition
 description: >
   Use when converting one existing Keboola Storage table on BigQuery to a
   partitioned and/or clustered layout. Covers: the copy into a new layout and
-  the swap into the production name, a date held in a STRING column (the
+  the swap into the production name, the in-place clustering change of a
+  cluster-only table, a date held in a STRING column (the
   type-change path), the preflight of security objects (policy tags, table IAM
   bindings, row access policies, search indexes), validation before the swap,
   rollback with a second swap, and recovery of a half-moved swap. Triggers:
@@ -17,7 +18,8 @@ description: >
 Converts **one** existing Storage table on a BigQuery project to a partitioned
 and/or clustered layout. The conversion runs from the client over the existing
 Storage API: copy the table into a new table with the requested layout,
-validate the copy, swap the two tables, keep the old table for 7 days.
+validate the copy, swap the two tables, keep the old table for 7 days. A table
+that needs only clustering is not copied: its clustering is changed in place.
 
 The procedure is in [references/runbook.md](references/runbook.md). Follow it
 section by section, in order. This file holds the scope, the classification,
@@ -26,6 +28,8 @@ the inputs and the guardrails.
 Requires kbagent 1.0.0 or later. The runbook relies on the table detail
 returning the Storage `definition` (layout and policy tag state), on
 `--timeout` of the copy and the swap, and on `swap-tables --branch 0`.
+The in-place path of a cluster-only table needs `kbagent storage clustering-set`
+*(since vNEXT)*. On an older kbagent the runbook falls back to copy and swap.
 
 General kbagent usage (output parsing, exit codes, other workflows) is in the
 main skill: [../kbagent/SKILL.md](../kbagent/SKILL.md).
@@ -37,6 +41,8 @@ It does:
 - Convert one table per run.
 - Copy, validate, swap, and keep the old table for 7 days.
 - Roll back with a second swap while the old table exists.
+- Change the clustering of a cluster-only table in place, without a copy and
+  without a swap, and roll it back by setting the previous clustering.
 
 It does not:
 
@@ -55,7 +61,7 @@ Classify the table before anything else. The class decides the path.
 
 | Class | Condition | Path |
 |---|---|---|
-| Cluster only | The table needs clustering columns and no partitioning. | Copy and swap (runbook section 4, path A, without the partitioning flags). |
+| Cluster only | The table needs clustering columns and no partitioning change. | In place with `kbagent storage clustering-set` (runbook section 4C). Copy and swap (runbook section 4, path A, without the partitioning flags) only when the owner wants the existing rows reclustered at once. |
 | Partition, column ready | The partition column is DATE, DATETIME or TIMESTAMP. | Copy path (runbook section 4, path A). |
 | Partition, column not ready | The date is held in a STRING column, or the table is untyped. | Type-change path (runbook section 4, path B). |
 | No key | No partition column and no clustering column is confirmed. | Stop. Ask the table owner. |
@@ -75,6 +81,8 @@ Ask the operator for every input before any write. Do not guess one.
    dataset for the `bq` steps. Without it the runbook refuses the table.
 
 Then follow [references/runbook.md](references/runbook.md) from section 0.
+For a cluster-only table that is converted in place, inputs 6 to 8 are not
+needed, and the runbook goes from section 0 to section 4C.
 
 ## Guardrails
 
@@ -84,7 +92,7 @@ Then follow [references/runbook.md](references/runbook.md) from section 0.
 - **A timeout is not a failure.** `STORAGE_JOB_TIMEOUT` (exit 4) means the job
   still runs on the server. Follow it with `storage job-detail --wait`. Never
   re-run a swap: a second swap swaps the tables back. Never re-run a copy: it
-  starts a second copy.
+  starts a second copy. This also holds for the in-place clustering change.
 - **A half-moved swap stops the run.** On the error
   `storage.tables.swapMetadataFailed`, stop and go to runbook section 9. Do
   not re-run the swap and do not write to either table.
