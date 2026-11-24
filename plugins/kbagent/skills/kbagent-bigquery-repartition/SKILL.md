@@ -58,6 +58,7 @@ Classify the table before anything else. The class decides the path.
 | Cluster only | The table needs clustering columns and no partitioning. | Copy and swap (runbook section 4, path A, without the partitioning flags). |
 | Partition, column ready | The partition column is DATE, DATETIME or TIMESTAMP. | Copy path (runbook section 4, path A). |
 | Partition, column not ready | The date is held in a STRING column, or the table is untyped. | Type-change path (runbook section 4, path B). |
+| Any class, with a column default | At least one column has a default, whatever the partition column is. | Runbook section 4, path B: the copy path cannot set a default. Without a type change when the partition column is ready or the table is cluster only. |
 | No key | No partition column and no clustering column is confirmed. | Stop. Ask the table owner. |
 
 ## How to run this

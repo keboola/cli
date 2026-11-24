@@ -92,7 +92,9 @@ Read from the result:
   (`100` of STRING(100), `38,9` of NUMERIC(38,9)). Record it per column.
   Path B passes it to the copy, and section 5 compares it.
   A table that has any `column_details[].default` is path B as well, whatever
-  the type of `COL` is (section 4, path A, "Column defaults").
+  the type of `COL` is (section 4, path A, "Column defaults"). When `COL` is
+  already DATE, DATETIME or TIMESTAMP, or the table is cluster only, it takes
+  path B **without a type change** (section 4, path B).
 - `definition.timePartitioning`, `rangePartitioning`, `clustering`: the
   current layout.
 - `definition.requirePartitionFilter`. Refuse the table when it is true. Every
@@ -404,9 +406,16 @@ section 1.
 
 Record the duration of the copy from the job times.
 
-### Path B: type change (the date is a STRING, or the table is untyped)
+### Path B: typed empty table filled by a transformation
 
-#### 4a. Profile the column
+Path B has two variants. Decide which one applies before 4a:
+
+| Variant | When | What differs |
+|---|---|---|
+| With a type change | `COL` is a STRING, or the table is untyped. | 4a runs. In 4b `COL` becomes `DATE`. The fill parses `COL`. |
+| Without a type change | The table is here only because of a column default: `COL` is already DATE, DATETIME or TIMESTAMP, or the table is cluster only. | Skip 4a. In 4b every column, `COL` included, keeps its type. The fill selects every column unchanged. |
+
+#### 4a. Profile the column (variant with a type change only)
 
 The format string is an input from the owner. The default is `%Y-%m-%d`.
 
@@ -425,7 +434,9 @@ Every column keeps its type from `column_details`, with its length: a column
 recorded with a `length` in section 1 is passed as `--column NAME:TYPE(length)`,
 for example `--column NAME:STRING(100)` or `--column AMOUNT:NUMERIC(38,9)`. A
 bare `--column NAME:STRING` creates the column without the length limit of the
-source. On an untyped table every column is `STRING`. `COL` becomes `DATE`. NOT NULL and the primary key are the
+source. On an untyped table every column is `STRING`. With a type change `COL`
+becomes `DATE`; without one it keeps its type and length like every other
+column, and a cluster-only table gets no `--time-partitioning-*` flags. NOT NULL and the primary key are the
 same as on the source: pass one `--not-null-column` for every column recorded
 with `nullable: false` in section 1. Every column default recorded in section 1
 (`column_details[].default`) is repeated with `--default name=value`: the copy
@@ -469,6 +480,9 @@ order, as `--primary-key` of section 4b. An output mapping whose key differs
 from the key of the destination table does not load as it is. Omit
 `primary_key` only when the table has no primary key.
 
+Without a type change the SELECT lists every column unchanged, `COL`
+included: `CREATE TABLE T_repart AS SELECT PK, COL, C1, OTHER FROM T`.
+
 The column list in the SELECT is the full column list of the source, in the
 order of the source. Run `config delete` only after a successful job: it
 moves the helper configuration to the trash. When the job fails, stop and
@@ -478,8 +492,9 @@ and the helper workspace.
 kbagent has no command that imports a workspace table into a Storage table.
 That is why the fill goes through a transformation and its output mapping.
 
-After the swap the owner changes the writers of `B.T`, so that they write a
-DATE into `COL`. The runbook does not change them.
+With a type change, after the swap the owner changes the writers of `B.T`,
+so that they write a DATE into `COL`. The runbook does not change them.
+Without a type change the writers stay as they are.
 
 ## 4c. Secure the copy before the swap (a person with BigQuery access)
 
@@ -569,8 +584,9 @@ helper workspace.
 - **Row count.** `old_rows` equals `new_rows`, and both equal the row count
   recorded right before the copy (section 3). A difference means that a
   write landed.
-- **Columns and types.** The column list and the types are equal. Path B:
-  only `COL` differs, and it is `DATE`.
+- **Columns and types.** The column list and the types are equal. Path B
+  with a type change: only `COL` differs, and it is `DATE`. Path B without a
+  type change: no column differs.
 - **Length.** `column_details[].length` of each column equals the value
   recorded for `B.T` in section 1. A column that has a length on one table
   and none, or another one, on the other table is a mismatch. Path B with a
@@ -617,9 +633,10 @@ that table:
 
 - Path A: `COL` has the same type on both tables, so `PART_OLD` and
   `PART_NEW` are the same expression.
-- Path B: on the old table `COL` is a STRING, so `PART_OLD` uses
-  `SAFE.PARSE_DATE` with the format string of section 4a. On the new table
-  `COL` is a DATE, so `PART_NEW` uses `COL`.
+- Path B with a type change: on the old table `COL` is a STRING, so
+  `PART_OLD` uses `SAFE.PARSE_DATE` with the format string of section 4a. On
+  the new table `COL` is a DATE, so `PART_NEW` uses `COL`.
+- Path B without a type change: as on path A, both are the same expression.
 
 Rows with NULL in `COL` form one group with `p` NULL on each table, and the
 query compares the two groups like any other partition. An empty result
@@ -771,7 +788,7 @@ After a rollback the original physical table is back at `B.T`, with its IAM
 bindings. The aliases that the owner created again after the first swap now
 read `B.T_repart`: the owner deletes them and creates them again on `B.T`
 (section 6, step 4). A person creates the search indexes again
-(section 6, step 3). After a path B rollback the owner also reverts the
+(section 6, step 3). After a rollback of path B with a type change the owner also reverts the
 writers to STRING.
 
 Time travel of the new table starts at the copy. A restore to an earlier
