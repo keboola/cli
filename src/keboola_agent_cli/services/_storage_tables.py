@@ -1,4 +1,4 @@
-"""Table helpers of `StorageService`: row shaping, the create-table source and layout, branch checks.
+"""Table helpers of `StorageService`: row shaping, column specs, the create-table source and layout, branch checks.
 
 Lives outside ``storage_service.py`` because that module is over its
 file-size budget (CONTRIBUTING.md > "File-size budgets"): pure helpers carry
@@ -7,6 +7,7 @@ no orchestration, so they are what moves out.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ..errors import ErrorCode, KeboolaApiError
@@ -179,3 +180,89 @@ def build_bigquery_layout(
         clustering = {"fields": list(clustering_fields)}
 
     return time_partitioning, range_partitioning, clustering
+
+
+# "name:TYPE" or "name:TYPE(length)" -- type is pass-through to the Keboola
+# Storage API, which validates type/length combinations per backend and
+# returns clear errors (e.g. "'10' is not valid length for INTEGER"). This
+# lets the CLI accept any native backend type (VARCHAR, NUMBER, TIMESTAMP_TZ,
+# VARIANT, ...) without maintaining a per-backend whitelist.
+_COL_SPEC_RE = re.compile(
+    r"^\s*(?P<name>[^:\s][^:]*?)"
+    r"\s*:\s*(?P<type>[A-Za-z_][A-Za-z0-9_]*)"
+    r"\s*(?:\(\s*(?P<length>[0-9][0-9,\s]*)\s*\))?"
+    r"\s*$"
+)
+
+
+def parse_column_spec(
+    col_spec: str,
+    not_null: set[str],
+    defaults: dict[str, str],
+) -> dict[str, Any]:
+    """Parse a single --column argument into a Storage API column definition.
+
+    Accepted shapes:
+
+    - ``name``                  bare name; implicit STRING default
+    - ``name:TYPE``             e.g. ``id:INTEGER``, ``name:STRING``
+    - ``name:TYPE(length)``     e.g. ``amount:NUMERIC(18,2)``, ``pk:VARCHAR(40)``
+
+    The TYPE value is uppercased and passed through to the Storage API
+    unmodified -- Keboola validates type/length per backend (Snowflake,
+    BigQuery, Redshift) and returns precise errors for invalid combinations.
+    No per-backend whitelist is maintained here.
+    """
+    if ":" not in col_spec:
+        col_name, col_type, col_length = col_spec.strip(), "STRING", None
+    else:
+        m = _COL_SPEC_RE.match(col_spec)
+        if not m:
+            raise ValueError(
+                f"Invalid column spec {col_spec!r}. Expected 'name:TYPE' or "
+                f"'name:TYPE(length)' (e.g. 'amount:NUMERIC(18,2)', "
+                f"'pk:VARCHAR(40)', 'ts:TIMESTAMP_TZ')."
+            )
+        col_name = m.group("name").strip()
+        col_type = m.group("type").upper()
+        raw_length = m.group("length")
+        col_length = re.sub(r"\s+", "", raw_length) if raw_length is not None else None
+
+    if not col_name:
+        raise ValueError(f"Column name is empty in spec {col_spec!r}.")
+
+    definition: dict[str, Any] = {"type": col_type}
+    if col_length:
+        definition["length"] = col_length
+    if col_name in not_null:
+        definition["nullable"] = False
+    if col_name in defaults:
+        definition["default"] = defaults[col_name]
+    return {"name": col_name, "definition": definition}
+
+
+def add_column_definition(
+    table: dict[str, Any],
+    column: str,
+    parsed: dict[str, Any],
+    not_null: bool,
+    default: str | None,
+) -> dict[str, Any] | None:
+    """The ``definition`` that ``storage add-column`` sends for ``table``.
+
+    Storage accepts a definition only for a typed table (``isTyped``); an
+    untyped table takes ``{"name": ...}`` alone, so a type, ``not_null`` or
+    ``default`` is refused before the request.
+
+    Raises:
+        ValueError: the table is untyped and the spec carries a type,
+            ``not_null`` or ``default``.
+    """
+    if table.get("isTyped"):
+        return parsed["definition"]
+    if ":" in column or not_null or default is not None:
+        raise ValueError(
+            f"Table {table.get('id')!r} is untyped: add the column by name only "
+            f"(--column {parsed['name']}), without a type, --not-null or --default."
+        )
+    return None

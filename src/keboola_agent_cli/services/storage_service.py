@@ -5,7 +5,6 @@ bucket metadata (sourceBucket, sourceProject) that thinner listings drop.
 """
 
 import logging
-import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -35,9 +34,11 @@ from ._storage_jobs import (
     with_job_timeout_hint,
 )
 from ._storage_tables import (
+    add_column_definition,
     build_bigquery_layout,
     build_table_source,
     normalize_table_rows,
+    parse_column_spec,
     refuse_production_clone,
 )
 from ._table_detail import build_table_detail
@@ -70,65 +71,6 @@ def _detect_legacy_branch_storage(client: Any, branch_id: int | None) -> bool:
             exc,
         )
         return False
-
-
-# "name:TYPE" or "name:TYPE(length)" -- type is pass-through to the Keboola
-# Storage API, which validates type/length combinations per backend and
-# returns clear errors (e.g. "'10' is not valid length for INTEGER"). This
-# lets the CLI accept any native backend type (VARCHAR, NUMBER, TIMESTAMP_TZ,
-# VARIANT, ...) without maintaining a per-backend whitelist.
-_COL_SPEC_RE = re.compile(
-    r"^\s*(?P<name>[^:\s][^:]*?)"
-    r"\s*:\s*(?P<type>[A-Za-z_][A-Za-z0-9_]*)"
-    r"\s*(?:\(\s*(?P<length>[0-9][0-9,\s]*)\s*\))?"
-    r"\s*$"
-)
-
-
-def _parse_column_spec(
-    col_spec: str,
-    not_null: set[str],
-    defaults: dict[str, str],
-) -> dict[str, Any]:
-    """Parse a single --column argument into a Storage API column definition.
-
-    Accepted shapes:
-
-    - ``name``                  bare name; implicit STRING default
-    - ``name:TYPE``             e.g. ``id:INTEGER``, ``name:STRING``
-    - ``name:TYPE(length)``     e.g. ``amount:NUMERIC(18,2)``, ``pk:VARCHAR(40)``
-
-    The TYPE value is uppercased and passed through to the Storage API
-    unmodified -- Keboola validates type/length per backend (Snowflake,
-    BigQuery, Redshift) and returns precise errors for invalid combinations.
-    No per-backend whitelist is maintained here.
-    """
-    if ":" not in col_spec:
-        col_name, col_type, col_length = col_spec.strip(), "STRING", None
-    else:
-        m = _COL_SPEC_RE.match(col_spec)
-        if not m:
-            raise ValueError(
-                f"Invalid column spec {col_spec!r}. Expected 'name:TYPE' or "
-                f"'name:TYPE(length)' (e.g. 'amount:NUMERIC(18,2)', "
-                f"'pk:VARCHAR(40)', 'ts:TIMESTAMP_TZ')."
-            )
-        col_name = m.group("name").strip()
-        col_type = m.group("type").upper()
-        raw_length = m.group("length")
-        col_length = re.sub(r"\s+", "", raw_length) if raw_length is not None else None
-
-    if not col_name:
-        raise ValueError(f"Column name is empty in spec {col_spec!r}.")
-
-    definition: dict[str, Any] = {"type": col_type}
-    if col_length:
-        definition["length"] = col_length
-    if col_name in not_null:
-        definition["nullable"] = False
-    if col_name in defaults:
-        definition["default"] = defaults[col_name]
-    return {"name": col_name, "definition": definition}
 
 
 def _parse_default_assignments(defaults: list[str] | None) -> dict[str, str]:
@@ -763,7 +705,7 @@ class StorageService(ColumnDescriptionsMixin):
             )
 
         parsed_columns = (
-            [_parse_column_spec(col_spec, not_null_set, defaults_map) for col_spec in columns]
+            [parse_column_spec(col_spec, not_null_set, defaults_map) for col_spec in columns]
             if columns
             else []
         )
@@ -1426,21 +1368,12 @@ class StorageService(ColumnDescriptionsMixin):
         col_name = column.split(":", 1)[0].strip()
         not_null_set = {col_name} if not_null else set()
         defaults = {col_name: default} if default is not None else {}
-        parsed = _parse_column_spec(column, not_null_set, defaults)
-
-        definition: dict[str, Any] | None = parsed["definition"]
+        parsed = parse_column_spec(column, not_null_set, defaults)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
             table = client.get_table_detail(table_id, branch_id=branch_id)
-            if not table.get("isTyped"):
-                if ":" in column or not_null or default is not None:
-                    raise ValueError(
-                        f"Table {table_id!r} is untyped: add the column by name only "
-                        f"(--column {parsed['name']}), without a type, --not-null or "
-                        f"--default."
-                    )
-                definition = None
+            definition = add_column_definition(table, column, parsed, not_null, default)
             client.add_column(
                 table_id,
                 name=parsed["name"],
