@@ -390,6 +390,12 @@ never re-run the copy:
 kbagent --json storage job-detail --project ALIAS --job-id JOB_ID --wait --timeout 3600
 ```
 
+When the copy ends in any other error, or the job that you waited for ends
+with `STORAGE_JOB_FAILED`: stop, and never re-run the copy. Run the abort
+step (section 4d). It reads whether `B.T_repart` exists, drops it when it
+does, and deletes the helper workspace. A new attempt starts again at
+section 1.
+
 Record the duration of the copy from the job times.
 
 ### Path B: type change (the date is a STRING, or the table is untyped)
@@ -513,8 +519,8 @@ step (section 4d), and refuse the table.
 
 ## 4d. Abort before the swap
 
-Every stop between the copy and the swap ends here: a failed path B job, a
-missing policy tag (section 4b or 4c), a step of section 4c that cannot be
+Every stop between the copy and the swap ends here: a failed path A copy, a
+failed path B job, a missing policy tag (section 4b or 4c), a step of section 4c that cannot be
 done, a failed check of section 5. Until this step runs, `B.T_repart` is a
 full second copy of the data, personal data included, possibly without its
 policy tags, and readable by every dataset reader.
@@ -525,13 +531,16 @@ production table, and section 8 decides about it.
 With the owner's yes, in this order:
 
 ```bash
+kbagent --json storage table-detail --project ALIAS --table-id B.T_repart
 kbagent --json storage delete-table --project ALIAS --table-id B.T_repart --dry-run
 kbagent --json storage delete-table --project ALIAS --table-id B.T_repart --yes
 kbagent --json config delete --project ALIAS --component-id keboola.google-bigquery-transformation --config-id CFG_ID
 kbagent --json workspace delete --project ALIAS --workspace-id WS_ID --yes
 ```
 
-- The copy goes first: it is the object that holds data.
+- The copy goes first: it is the object that holds data. After a failed
+  path A copy the table may not exist: when `table-detail` answers
+  `NOT_FOUND`, skip both `delete-table` commands.
 - `config delete` applies to path B only, and only when `CFG_ID` still
   exists (the fill job failed, so section 4 did not delete it).
 - Read `B.T` once more with `storage table-detail` and confirm that it is
