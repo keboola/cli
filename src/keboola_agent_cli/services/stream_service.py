@@ -120,26 +120,6 @@ class StreamService:
         sourceId) is returned untouched with ``status="skipped"`` (its sinks are
         also reconciled when ``provision_sinks`` so a half-set-up source heals).
         """
-        if source_type != "http" and (table_id is not None or columns is not None):
-            raise ConfigError("--table-id and --columns apply only to HTTP sources.")
-        if not provision_sinks and (table_id is not None or columns is not None):
-            raise ConfigError("--table-id and --columns cannot be combined with --no-sinks.")
-        if table_id is not None and not table_id.strip():
-            raise ConfigError("--table-id must not be empty.")
-        if columns is not None and (
-            not isinstance(columns, list)
-            or any(
-                not isinstance(col, dict)
-                or not isinstance(col.get("name"), str)
-                or not col["name"].strip()
-                or col.get("type")
-                not in ("uuid", "datetime", "ip", "body", "headers", "path", "template")
-                for col in columns
-            )
-        ):
-            raise ConfigError(
-                "--columns must be a JSON array of column objects with name and type."
-            )
         creds = self._resolve_project(alias)
         branch = _branch_ref(branch_id)
         client = self._stream_client_factory(creds.stack_url, creds.token)

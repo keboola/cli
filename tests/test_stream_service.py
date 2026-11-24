@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -253,28 +252,6 @@ class TestCreate:
         assert result["status"] == "skipped"
         assert mock.create_sink.call_count == (0 if sinks else 1)
         mock.create_source.assert_not_called()
-
-    @pytest.mark.parametrize(
-        "kwargs",
-        [
-            {"columns": {}},
-            {"columns": [1]},
-            {"columns": [{"name": "x", "type": "bad"}]},
-            {"columns": [{"type": "body"}]},
-            {"table_id": " "},
-            {"table_id": "in.c-x.events", "provision_sinks": False},
-            {"source_type": "otlp", "columns": []},
-        ],
-    )
-    def test_http_invalid_options_before_writes(
-        self, store, client_factory, kwargs: dict[str, Any]
-    ) -> None:
-        factory, mock = client_factory
-        options: dict[str, Any] = {"source_type": "http", **kwargs}
-        with pytest.raises(ConfigError):
-            _svc(store, factory).create_source(alias=ALIAS, name="s", **options)
-        mock.create_source.assert_not_called()
-        factory.assert_not_called()
 
     def test_http_sink_failure_propagates_and_closes(self, store, client_factory) -> None:
         factory, mock = client_factory

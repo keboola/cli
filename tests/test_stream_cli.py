@@ -161,6 +161,17 @@ class TestCreate:
         [
             ["--columns", "not-json"],
             ["--columns", "[]", "--columns-file", "unused.json"],
+            ["--type", "otlp", "--table-id", "in.c-test.events"],
+            ["--type", "otlp", "--columns", "[]"],
+            ["--no-sinks", "--table-id", "in.c-test.events"],
+            ["--no-sinks", "--columns", "[]"],
+            ["--table-id", ""],
+            ["--table-id", " "],
+            ["--columns", "{}"],
+            ["--columns", "[1]"],
+            ["--columns", '[{"name":"x","type":"bad"}]'],
+            ["--columns", '[{"type":"body"}]'],
+            ["--columns", '[{"name":" ","type":"body"}]'],
         ],
     )
     def test_invalid_columns_input(self, tmp_path: Path, args) -> None:
@@ -179,14 +190,27 @@ class TestCreate:
                 ALIAS,
                 "--name",
                 "s1",
-                "--type",
-                "http",
+                *([] if "--type" in args else ["--type", "http"]),
                 *args,
             ],
         )
         assert result.exit_code == 2, result.output
-        assert json.loads(result.output)["error"]["code"] == "USAGE_ERROR"
+        assert json.loads(result.output)["error"]["code"] == "INVALID_ARGUMENT"
         svc.create_source.assert_not_called()
+
+    def test_service_value_error_is_not_an_option_error(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "c"
+        config_dir.mkdir()
+        _seed(config_dir)
+        svc = MagicMock()
+        svc.create_source.side_effect = ValueError("service failure")
+        result = _invoke(
+            config_dir,
+            svc,
+            ["--json", "stream", "create-source", "--project", ALIAS, "--name", "s1"],
+        )
+        assert result.exit_code != 2
+        svc.create_source.assert_called_once()
 
 
 class TestDetail:
