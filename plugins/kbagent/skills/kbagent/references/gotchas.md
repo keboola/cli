@@ -5732,7 +5732,8 @@ slice -- `workspace query` with a `WHERE` clause needs a live workspace.
 ### `storage add-column` on an untyped table takes only a bare name
 
 (since vNEXT) Storage accepts a column `definition` only for a typed table
-(`isTyped: true` in `GET /v2/storage/tables/{id}`). On an untyped table the API rejects any
+(`isTyped: true` in `GET /v2/storage/tables/{id}`, or in
+`GET /v2/storage/branch/{branch_id}/tables/{id}` for a dev branch). On an untyped table the API rejects any
 `definition` with `400 Invalid parameters - definition: This field was not
 expected.` Before vNEXT kbagent turned a bare `--column NAME` into an implicit
 `STRING` definition, so `add-column` failed on every untyped table. kbagent now
