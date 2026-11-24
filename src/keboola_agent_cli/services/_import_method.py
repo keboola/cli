@@ -53,7 +53,7 @@ def refuse_unsupported_import_method(
     bucket_id = table_id.rsplit(".", 1)[0]
     try:
         backend = client.get_bucket_detail(bucket_id, branch_id=branch_id).get("backend")
-        where = f"table {table_id} is in bucket {bucket_id} on the {{backend}} backend"
+        bucket_exists = True
     except KeboolaApiError as exc:
         if exc.status_code != 404 or not creates_missing_bucket:
             # An unreadable bucket (403, or 404 the caller will not create)
@@ -63,17 +63,22 @@ def refuse_unsupported_import_method(
             backend = client.verify_token().default_backend
         except KeboolaApiError:
             return method
-        where = (
-            f"bucket {bucket_id} does not exist yet; a new bucket gets the project's "
-            "default backend, {backend}"
-        )
+        bucket_exists = False
     backend = backend.lower() if isinstance(backend, str) else ""
     if not backend or backend == SNOWFLAKE_BACKEND:
         return method
+    # The IDs go into an f-string only, never through str.format: a brace in a
+    # table ID is text, not a format field.
+    where = (
+        f"table {table_id} is in bucket {bucket_id} on the {backend} backend"
+        if bucket_exists
+        else f"bucket {bucket_id} does not exist yet; a new bucket gets the project's "
+        f"default backend, {backend}"
+    )
     raise KeboolaApiError(
         message=(
             f"Import method '{method.value}' works only on Snowflake tables, and "
-            f"{where.format(backend=backend)}. Run the import without --import-method "
+            f"{where}. Run the import without --import-method "
             "(import_method over kbagent serve) or with the value 'auto'. Nothing was "
             "created or uploaded."
         ),

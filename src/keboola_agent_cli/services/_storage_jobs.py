@@ -243,40 +243,74 @@ def with_job_timeout_hint(
     return _with_hint(exc, hint)
 
 
-def _import_method_not_supported(
-    exc: KeboolaApiError, alias: str, table_id: str, options: ImportOptions
+def is_import_method_refusal(exc: KeboolaApiError, import_method: ImportMethod) -> bool:
+    """Whether ``exc`` is Storage refusing the explicit ``import_method`` sent.
+
+    Storage answers an explicit ``importMethod`` on a non-Snowflake table with
+    HTTP 400 ``storage.tables.importMethodNotSupported``. With ``auto`` no
+    method was sent, so the same code is not the caller's option failing.
+    """
+    return (
+        import_method != ImportMethod.auto
+        and exc.status_code == 400
+        and exc.details.get("api_error_code") == IMPORT_METHOD_NOT_SUPPORTED_CODE
+    )
+
+
+def import_method_refusal(
+    exc: KeboolaApiError,
+    table_id: str,
+    import_method: ImportMethod,
+    *,
+    option: str,
+    recovery: str = "",
 ) -> KeboolaApiError:
     """The Storage refusal of an explicit import method, as a usage error.
 
-    Storage answers an explicit ``importMethod`` on a non-Snowflake table with
-    HTTP 400 ``storage.tables.importMethodNotSupported``; nothing was
-    imported. It is the caller's option that is wrong, so the error is
-    ``INVALID_ARGUMENT`` (exit 2) and names the option. Details are kept
-    (``api_error_code``, ``file_id``). The ``load-file`` command for an
-    already-uploaded file leaves the method out, because repeating it fails
-    the same way.
+    Nothing was imported and it is the caller's option that is wrong, so the
+    error is ``INVALID_ARGUMENT`` (exit 2 on the CLI) naming ``option``, the
+    way the caller passed the method. Details are kept (``api_error_code``,
+    ``file_id``). ``recovery`` is appended as given.
     """
     params = exc.details.get("api_error_params")
     backend = params.get("backend") if isinstance(params, dict) else None
     where = f"the {backend} backend" if isinstance(backend, str) and backend else "its backend"
     message = (
-        f"Import method '{options.import_method.value}' works only on Snowflake tables, "
-        f"and table {table_id} is on {where}. Run the import without --import-method "
-        f"(import_method over kbagent serve) or with the value 'auto'. Storage said: {exc.message}"
+        f"Import method '{import_method.value}' works only on Snowflake tables, "
+        f"and table {table_id} is on {where}. Run the import without {option} "
+        f"or with the value 'auto'. Storage said: {exc.message}{recovery}"
     )
-    file_id = exc.details.get("file_id")
-    if file_id is not None and exc.details.get("job_id") is None:
-        retry = replace(options, import_method=ImportMethod.auto)
-        message += (
-            f" The file is already in Storage; import it with: "
-            f"{_load_file_command(alias, file_id, table_id, retry)}"
-        )
     return KeboolaApiError(
         message=message,
         status_code=exc.status_code,
         error_code=ErrorCode.INVALID_ARGUMENT,
         retryable=False,
         details=exc.details,
+    )
+
+
+def _import_method_not_supported(
+    exc: KeboolaApiError, alias: str, table_id: str, options: ImportOptions
+) -> KeboolaApiError:
+    """:func:`import_method_refusal` for a ``kbagent`` command or serve route.
+
+    The ``load-file`` command for an already-uploaded file leaves the method
+    out, because repeating it fails the same way.
+    """
+    recovery = ""
+    file_id = exc.details.get("file_id")
+    if file_id is not None and exc.details.get("job_id") is None:
+        retry = replace(options, import_method=ImportMethod.auto)
+        recovery = (
+            f" The file is already in Storage; import it with: "
+            f"{_load_file_command(alias, file_id, table_id, retry)}"
+        )
+    return import_method_refusal(
+        exc,
+        table_id,
+        options.import_method,
+        option="--import-method (import_method over kbagent serve)",
+        recovery=recovery,
     )
 
 
@@ -305,11 +339,7 @@ def with_import_hint(
     Anything else comes back as an equal copy, so a caller can always
     ``raise with_import_hint(exc, ...) from exc``.
     """
-    if (
-        options.import_method != ImportMethod.auto
-        and exc.status_code == 400
-        and exc.details.get("api_error_code") == IMPORT_METHOD_NOT_SUPPORTED_CODE
-    ):
+    if is_import_method_refusal(exc, options.import_method):
         return _import_method_not_supported(exc, alias, table_id, options)
     job_id = exc.details.get("job_id")
     file_id = exc.details.get("file_id")

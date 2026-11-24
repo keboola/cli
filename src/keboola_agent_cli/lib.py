@@ -65,6 +65,7 @@ from .result_models import (
     UploadTableResult,
 )
 from .services._import_method import refuse_unsupported_import_method
+from .services._storage_jobs import import_method_refusal, is_import_method_refusal
 from .services._token_last_used import dormancy_rank, enrich_tokens
 from .services.job_idempotency_store import JobIdempotencyStore, run_idempotent_job
 
@@ -104,6 +105,27 @@ def _with_uploaded_file_hint(exc: KeboolaApiError) -> KeboolaApiError:
         error_code=exc.error_code,
         retryable=exc.retryable,
         details=exc.details,
+    )
+
+
+def _import_method_refusal(
+    exc: KeboolaApiError, table_id: str, import_method: ImportMethod
+) -> KeboolaApiError:
+    """Storage's refusal of ``import_method``, as the CLI reports it (``INVALID_ARGUMENT``).
+
+    Reached when the pre-flight could not read the bucket's backend. The
+    recovery for an uploaded file is in plain words, without the method,
+    because repeating it fails the same way.
+    """
+    recovery = ""
+    file_id = exc.details.get("file_id")
+    if file_id is not None and exc.details.get("job_id") is None:
+        recovery = (
+            f" The file was uploaded as Storage file {file_id}; import it from there "
+            "without an import method instead of uploading it again."
+        )
+    return import_method_refusal(
+        exc, table_id, import_method, option="the import_method argument", recovery=recovery
     )
 
 
@@ -609,7 +631,9 @@ class Client:
         Raises:
             ValueError: ``import_method`` is not an :class:`ImportMethod` value.
             KeboolaApiError: ``INVALID_ARGUMENT`` for an import method on a
-                non-Snowflake table (nothing uploaded). On a wait timeout ``STORAGE_JOB_TIMEOUT``, NOT
+                non-Snowflake table: before the upload when the bucket's
+                backend is readable, else from Storage's refusal after it
+                (``details["file_id"]`` set, nothing imported). On a wait timeout ``STORAGE_JOB_TIMEOUT``, NOT
                 retryable -- the import keeps running; ``details`` carries
                 ``job_id`` and ``file_id``. Any failure after the upload
                 carries ``details["file_id"]``.
@@ -632,6 +656,8 @@ class Client:
                 import_method=import_method,
             )
         except KeboolaApiError as exc:
+            if is_import_method_refusal(exc, import_method):
+                raise _import_method_refusal(exc, table_id, import_method) from exc
             raise _with_uploaded_file_hint(exc) from exc
         job = outcome.job
         if job.get("status") == "error":
