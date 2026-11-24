@@ -228,8 +228,9 @@ Refuse the table, and change nothing, when one of these holds:
 - The operator cannot apply the recorded IAM bindings to the copy.
 - The copy was created without a policy tag that the source has (section 4c).
 - No partition column and no clustering column is confirmed.
-- `data_size_bytes` is over 5 TiB and the owner has not decided on the ranged
-  transformation. Stop and hand the table to the owner.
+- `data_size_bytes` is over 5 TiB (5,497,558,138,880 bytes). This version
+  does not convert such a table: it has no procedure that copies a table in
+  ranges. Hand the table to the owner.
 
 Nothing above this line created anything in the project, so a table that is
 refused here leaves nothing behind.
@@ -596,8 +597,7 @@ kbagent cannot read IAM bindings. The operator reads them on the copy:
 bq --project_id=GCP_PROJECT get-iam-policy --format=prettyjson DATASET.T_repart
 ```
 
-Tables over 5 TiB, and every path B table, also get a row count per
-partition. A cluster-only table has no partitions and skips it.
+Every path B table also gets a row count per partition. A cluster-only table has no partitions and skips it.
 
 ```bash
 kbagent --json workspace query --project ALIAS --workspace-id WS_ID --full --sql "SELECT p, SUM(old_c) AS old_rows, SUM(new_c) AS new_rows FROM (SELECT PART_OLD AS p, COUNT(*) AS old_c, 0 AS new_c FROM T GROUP BY p UNION ALL SELECT PART_NEW AS p, 0 AS old_c, COUNT(*) AS new_c FROM T_repart GROUP BY p) GROUP BY p HAVING SUM(old_c) != SUM(new_c)"
