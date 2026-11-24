@@ -803,8 +803,18 @@ Compare, for both tables, the physical state with the Storage rows:
 
 kbagent has no bucket refresh and no other command that repairs the metadata
 of a half-moved swap. Hand the evidence to the Connection maintainers
-(Storage). They finish or undo the metadata move. Continue at section 6,
-step 1, only after both tables match their physical state.
+(Storage). They finish or undo the metadata move. Continue only after both
+tables match their physical state. Where to continue depends on which swap
+failed:
+
+- **The first swap (section 6) failed.** `B.T` must now hold the new layout.
+  Continue at section 6, step 1.
+- **The rollback swap (section 8) failed.** `B.T` must now hold the old
+  layout and the original physical table. Do not use the steps of section 6.
+  Check with `storage table-detail` that `definition` of `B.T` shows the
+  layout recorded in section 1, then continue with the steps after the
+  rollback in section 8: the IAM bindings, the search indexes, the aliases
+  and, on path B, the writers.
 
 ## 10. Cost and record
 
