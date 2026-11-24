@@ -33,7 +33,19 @@ Placeholders used in every command:
 | `GCP_PROJECT` | Google Cloud project of the Keboola project |
 | `DATASET` | BigQuery dataset of bucket `B` |
 
-`GCP_PROJECT` and `DATASET` are in `sql_path` of the table detail (section 1).
+`DATASET` is in `sql_path` and `backend_path` of the table detail (section 1).
+`GCP_PROJECT` is the first segment of `sql_path` only when the path has three
+segments. Storage often leaves the project out, and then `sql_path` is
+`` `DATASET`.`T` ``. In that case the operator who runs `bq` supplies the
+project ID of the BigQuery backend of the Keboola project (from the Google
+Cloud console, or from the person who administers the backend). Check it
+before any other `bq` command: `bq --project_id=GCP_PROJECT show DATASET.T`
+must find the table, and `tableReference.datasetId` in its output must equal
+`DATASET`.
+
+A `bq` command that ends with "not found" or with a permission error has read
+nothing. It does not mean that there is nothing to carry. Treat the objects
+as unknown and refuse the table (section 1, refuse rules).
 
 `T_repart` lives in the same bucket as `T`. The swap refuses a pair of tables
 from two buckets, and it refuses an alias.
