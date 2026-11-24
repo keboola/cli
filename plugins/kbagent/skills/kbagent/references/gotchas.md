@@ -5214,7 +5214,7 @@ requires a **master (admin) token** — `canManageTokens` alone is not enough
   the OAuth flow via the Keboola UI instead.
 - AI agents creating the project token via `kbagent project add` /
   `kbagent project refresh` must distinguish supplied and minted tokens:
-  `project add` keeps the supplied token and warns without failing when it
+  `project add` and `project edit` keep the supplied token and warn without failing when it
   is non-master (since vNEXT). The warning goes to stderr, or the top-level
   JSON `warnings[]` (also `data.warnings`). Obtain a master Storage API token
   from the Keboola UI for `config oauth-url` and `token create`.

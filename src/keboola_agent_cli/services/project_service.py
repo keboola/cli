@@ -27,6 +27,15 @@ AUTH_MODE_SESSION = "session"
 AUTH_MODE_STATIC = "static"
 
 
+def non_master_token_warning(alias: str) -> str:
+    return (
+        f"Token for '{alias}' is not a master token. `config oauth-url` and "
+        "`token create` require a master Storage API token from the Keboola UI. "
+        "`project refresh` does NOT produce a master token, even though its "
+        "tokens have canManageTokens=true."
+    )
+
+
 def auth_mode_of(token: str) -> str:
     """Classify a stored token: ``session`` for a browser-login sentinel.
 
@@ -93,14 +102,7 @@ class ProjectService(BaseService):
             "active_project_set": alias if became_active else None,
         }
         if not token_info.is_master_token:
-            result["warnings"] = [
-                (
-                    f"Token for '{alias}' is not a master token. `config oauth-url` and "
-                    "`token create` require a master Storage API token from the Keboola UI. "
-                    "`project refresh` does NOT produce a master token, even though its "
-                    "tokens have canManageTokens=true."
-                )
-            ]
+            result["warnings"] = [non_master_token_warning(alias)]
         return result
 
     def remove_project(self, alias: str, dry_run: bool = False) -> dict[str, Any]:
@@ -329,6 +331,8 @@ class ProjectService(BaseService):
             finally:
                 client.close()
             updates["token"] = token
+            if not token_info.is_master_token:
+                warnings.append(non_master_token_warning(alias))
             updates["project_name"] = token_info.project_name
             if token_info.project_id is not None:
                 updates["project_id"] = token_info.project_id
