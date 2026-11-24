@@ -167,8 +167,7 @@ def register(app: typer.Typer) -> None:
         if formatter.json_mode:
             formatter.output(result)
         elif result.get("status") == "unchanged":
-            formatter.console.print(f"[yellow]Description unchanged:[/yellow] {table_id}")
-            formatter.console.print(f"  {escape(description[:120])}")
+            formatter.success(f"No change: description of {table_id} already matches.")
         else:
             formatter.console.print(f"[bold green]Description set:[/bold green] {table_id}")
             formatter.console.print(f"  {escape(description[:120])}")
@@ -205,6 +204,9 @@ def register(app: typer.Typer) -> None:
         KBC.column.*.description metadata keys found on the same table (written by
         kbagent before 0.88.0) are migrated in the same write and removed; see
         'storage describe-migrate' to convert a whole bucket or project.
+
+        The result reports status 'updated' after a write, or 'unchanged' when
+        every column already has the text.
 
         Example:
 
@@ -257,12 +259,18 @@ def register(app: typer.Typer) -> None:
         if formatter.json_mode:
             formatter.output(result)
         else:
-            formatter.console.print(
-                f"[bold green]Column descriptions set:[/bold green] {table_id} "
-                f"({len(parsed)} column(s))"
-            )
-            for name, desc in parsed.items():
-                formatter.console.print(f"  {name}: {escape(desc[:80])}")
+            if result.get("status") == "unchanged":
+                formatter.success(
+                    f"No change: column descriptions on {table_id} already match "
+                    f"({len(parsed)} column(s))."
+                )
+            else:
+                formatter.console.print(
+                    f"[bold green]Column descriptions set:[/bold green] {table_id} "
+                    f"({len(parsed)} column(s))"
+                )
+                for name, desc in parsed.items():
+                    formatter.console.print(f"  {name}: {escape(desc[:80])}")
             migrated = result.get("migrated") or {}
             if migrated:
                 formatter.console.print(
@@ -397,7 +405,10 @@ def register(app: typer.Typer) -> None:
                 obj_id = item["id"]
                 if obj_type == "columns":
                     n = len(item.get("columns", {}))
-                    formatter.console.print(f"  [green]✓[/green] {obj_type} {obj_id} ({n} cols)")
+                    unchanged = ", unchanged" if item.get("status") == "unchanged" else ""
+                    formatter.console.print(
+                        f"  [green]✓[/green] {obj_type} {obj_id} ({n} cols{unchanged})"
+                    )
                 elif item.get("status") == "unchanged":
                     formatter.console.print(f"  [green]✓[/green] {obj_type} {obj_id} (unchanged)")
                 else:

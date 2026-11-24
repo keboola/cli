@@ -608,6 +608,125 @@ class TestDescribeColumnsService:
         assert result["skipped"][0]["column"] == "c2"
 
 
+def _with_column_descriptions(**descriptions: str) -> dict[str, Any]:
+    """A table-detail payload whose native definition stores ``descriptions``."""
+    return _table_detail(
+        columns=list(descriptions),
+        definition={
+            "columns": [
+                {"name": name, "definition": {"description": text}}
+                for name, text in descriptions.items()
+            ]
+        },
+    )
+
+
+class TestDescribeColumnsUnchanged:
+    """describe_columns() when Storage rejects the PUT (same rule as describe_table)."""
+
+    def test_success_reports_updated(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _table_detail(columns=["c1"])
+        mock_client.update_table_definition.return_value = _JOB_OK
+        service = _make_service(store, mock_client)
+
+        result = service.describe_columns(
+            alias="prod", table_id="in.c-sales.orders", columns={"c1": "d1"}
+        )
+
+        assert result["status"] == "updated"
+        assert result["result"] == _JOB_OK
+
+    def test_stored_text_reports_unchanged(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _with_column_descriptions(c1="d1", c2="d2")
+        mock_client.update_table_definition.side_effect = _definition_rejection()
+        service = _make_service(store, mock_client)
+
+        result = service.describe_columns(
+            alias="prod", table_id="in.c-sales.orders", columns={"c1": "d1", "c2": "d2"}
+        )
+
+        assert result["status"] == "unchanged"
+        assert result["result"] is None
+        assert "unchanged" in result["message"]
+        # One read before the write, one re-read after the rejection.
+        assert mock_client.get_table_detail.call_count == 2
+        mock_client.close.assert_called_once()
+
+    def test_different_stored_text_raises_original(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _with_column_descriptions(c1="d1", c2="old")
+        rejection = _definition_rejection()
+        mock_client.update_table_definition.side_effect = rejection
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.describe_columns(
+                alias="prod", table_id="in.c-sales.orders", columns={"c1": "d1", "c2": "new"}
+            )
+
+        assert excinfo.value is rejection
+        mock_client.close.assert_called_once()
+
+    def test_other_error_code_raises_without_reread(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.return_value = _with_column_descriptions(c1="d1")
+        rejection = _definition_rejection(api_error_code="storage.tables.validation")
+        mock_client.update_table_definition.side_effect = rejection
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.describe_columns(
+                alias="prod", table_id="in.c-sales.orders", columns={"c1": "d1"}
+            )
+
+        assert excinfo.value is rejection
+        mock_client.get_table_detail.assert_called_once()
+
+    def test_failed_reread_raises_original(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.get_table_detail.side_effect = [
+            _with_column_descriptions(c1="d1"),
+            KeboolaApiError(message="boom", status_code=500, error_code="SERVER_ERROR"),
+        ]
+        rejection = _definition_rejection()
+        mock_client.update_table_definition.side_effect = rejection
+        service = _make_service(store, mock_client)
+
+        with pytest.raises(KeboolaApiError) as excinfo:
+            service.describe_columns(
+                alias="prod", table_id="in.c-sales.orders", columns={"c1": "d1"}
+            )
+
+        assert excinfo.value is rejection
+
+    def test_deleted_legacy_entry_reports_updated(self, tmp_path: Path) -> None:
+        """Storage changed nothing, but the identical legacy key was deleted: a change."""
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        table = _with_column_descriptions(c1="d1")
+        table["metadata"] = [_legacy_entry(5, "c1", "d1")]
+        mock_client.get_table_detail.return_value = table
+        mock_client.update_table_definition.side_effect = _definition_rejection()
+        service = _make_service(store, mock_client)
+
+        result = service.describe_columns(
+            alias="prod", table_id="in.c-sales.orders", columns={"c1": "d1"}
+        )
+
+        assert result["status"] == "updated"
+        assert result["result"] is None
+        mock_client.delete_table_metadata.assert_called_once_with(
+            "in.c-sales.orders", 5, branch_id=None
+        )
+
+
 class TestDescribeBatchService:
     """Tests for StorageService.describe_batch()."""
 
@@ -648,6 +767,31 @@ class TestDescribeBatchService:
         assert mock_client.update_table_definition.call_count == 2
         table_item = next(a for a in result["applied"] if a["type"] == "table")
         assert table_item["status"] == "updated"
+        columns_item = next(a for a in result["applied"] if a["type"] == "columns")
+        assert columns_item["status"] == "updated"
+
+    def test_columns_with_stored_text_report_unchanged(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        mock_client = MagicMock()
+        mock_client.update_table_definition.side_effect = _definition_rejection()
+        mock_client.get_table_detail.return_value = _with_column_descriptions(order_id="Unique")
+        service = _make_service(store, mock_client)
+        batch_file = tmp_path / "batch.yaml"
+        batch_file.write_text(
+            "columns:\n  in.c-sales.orders:\n    order_id: Unique\n", encoding="utf-8"
+        )
+
+        result = service.describe_batch(alias="prod", from_file=batch_file)
+
+        assert result["errors"] == []
+        assert result["applied"] == [
+            {
+                "type": "columns",
+                "id": "in.c-sales.orders",
+                "columns": {"order_id": "Unique"},
+                "status": "unchanged",
+            }
+        ]
 
     def test_table_with_stored_text_reports_unchanged(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)

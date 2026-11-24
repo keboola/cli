@@ -58,7 +58,7 @@ For any operation that modifies a Keboola config or storage object, follow this 
 5. **Verify** by re-fetching the config and inspecting the new version.
 6. **Stop**. Do NOT auto-trigger `job run`, transformation execution, or any side-effecting follow-up. The user decides when to run.
 
-When working inside a git repository or project directory, run `kbagent init` (or `kbagent init --from-global`) once to create a local `.kbagent/` workspace. After that, kbagent works from any subdirectory of the project -- no need to `cd ~` first.
+When working inside a git repository or project directory, run `kbagent init` (or `kbagent init --from-global`) once to create a local `.kbagent/` workspace. After that, kbagent works from any subdirectory of the project -- no need to `cd ~` first. `--from-global` is a one-time copy: when a command there fails `INVALID_TOKEN` after a token rotation, follow [After a token rotation](references/safe-write-workflow.md#after-a-token-rotation-invalid_token-in-a-local-kbagent) (preview with `project refresh --dry-run`; never edit `.kbagent/config.json`).
 
 ## Choosing the right approach
 
@@ -231,6 +231,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Bind a cron schedule to a flow (upsert: creates or updates) | `kbagent flow schedule --project PROJECT --flow-id FLOW-ID --cron CRON` |
 | Remove all schedules bound to a flow (deletes keboola.scheduler configs) | `kbagent flow schedule-remove --project PROJECT --flow-id FLOW-ID` |
 | Show every trigger kbagent can see for a flow (cron + table triggers) | `kbagent flow triggers --project PROJECT --flow-id FLOW-ID` |
+| Run a conditional flow, or only some of its tasks | `kbagent flow run --project PROJECT --flow-id FLOW-ID` |
 | List cron schedules (keboola.scheduler configs) across projects | `kbagent schedule list --project PROJECT` |
 | Show full detail for a single cron schedule | `kbagent schedule detail --project PROJECT --schedule-id SCHEDULE-ID` |
 | Audit schedules by cron window or job-freshness | `kbagent schedule find --project PROJECT` |
@@ -239,6 +240,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Create a notification subscription | `kbagent notification create --project PROJECT --event EVENT --channel CHANNEL --address ADDRESS` |
 | Delete a notification subscription | `kbagent notification delete --project PROJECT --subscription-id SUBSCRIPTION-ID` |
 | Replace a subscription's recipient | `kbagent notification replace-recipient --project PROJECT --subscription-id SUBSCRIPTION-ID --address ADDRESS` |
+| Create a new subscription from an existing one, with overrides | `kbagent notification clone --project PROJECT --subscription-id SUBSCRIPTION-ID` |
 | List development branches of the active project, the given projects, or all projects | `kbagent branch list --project PROJECT` |
 | Create a new development branch and auto-activate it | `kbagent branch create --project PROJECT --name NAME` |
 | Set an existing development branch as active | `kbagent branch use --project PROJECT --branch BRANCH` |
@@ -463,6 +465,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Data apps** (create / deploy / start / stop / password / delete; the §9 redeploy contract) | [data-app-workflow](references/data-app-workflow.md) |
 | Storage Files (upload, download, tags, load/unload) | [storage-files-workflow](references/storage-files-workflow.md) |
 | **Large file upload** (100+ GB CSV / `.csv.gz` into one table; S3 multipart; `upload-table --no-wait` + `storage job-detail --wait`; never re-run while the import job runs) | [large-upload-workflow](references/large-upload-workflow.md) |
+| **Snowflake import method** (`--import-method` on `upload-table` / `load-file`, output-mapping key `import_method`; Snowflake only, a 400 elsewhere) | [import-method-workflow](references/import-method-workflow.md) |
 | **Table snapshots** (point-in-time backup; restore as a NEW table; `--name` required, no overwrite) | [snapshot-workflow](references/snapshot-workflow.md) |
 | **Python library** (`from keboola_agent_cli import Client` -- in-process query + Storage Files, no CLI/daemon/config-dir) | [library-workflow](references/library-workflow.md) |
 | **Data Streams (OTLP / OpenTelemetry)** (create/inspect OTLP source, masked secret-in-URL, OTEL_EXPORTER_OTLP_ENDPOINT) | [stream-workflow](references/stream-workflow.md) |
@@ -471,7 +474,11 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | Bucket sharing & linking | [sharing-workflow](references/sharing-workflow.md) |
 | **Project members & invitations** (single + bulk via CSV, role change, remove) | [member-workflow](references/member-workflow.md) |
 | **Billing / PAYG credits** (balance only; the shape of the invoice-history gap; PAYG_NOT_AVAILABLE; units) | [billing-workflow](references/billing-workflow.md) |
+| **Notifications** (who gets alerted for a flow; failure and slow-job alerts with `--overtime-percent`; recipient swap mints a new id; `clone` copies an alert to another flow) | [notification-workflow](references/notification-workflow.md) |
 | Dev branches | [branch-workflow](references/branch-workflow.md) |
+| **Conditional flows** (author / validate / update; **run the whole flow or only some tasks** with `flow run --task-id` / `--from-phase-id`: a partial run ignores conditions, `--dry-run` + user OK first, read `failed_task_ids`) | [flow-workflow](references/flow-workflow.md) |
+| Schedules (list / detail / find stale or overlapping cron schedules) | [schedule-workflow](references/schedule-workflow.md) |
+| Config runtime state (`config state-get` / `state-set`, never `config update --set state...`) | [config-state-workflow](references/config-state-workflow.md) |
 | **Merge requests** (dev branch -> production with review; conflicts + resolve; auto-merge is destructive; `--json merge` needs an explicit target) | [merge-request-workflow](references/merge-request-workflow.md) |
 | Encrypting secrets before a config write | [encrypt-workflow](references/encrypt-workflow.md) |
 | **Authorizing an OAuth component** (`config oauth-url`; no browser under `--json`, always echo the URL in a fenced block, verify by the config `version` bump) | [oauth-workflow](references/oauth-workflow.md) |

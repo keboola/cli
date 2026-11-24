@@ -501,7 +501,10 @@ class TestParametersLevelSchemaValidation:
             alias="prod",
             component_id="keboola.flow",
             name="My Flow",
-            configuration={"phases": [], "tasks": []},
+            configuration={
+                "phases": [{"id": "p1", "name": "P1"}],
+                "tasks": [{"id": "t1", "name": "T1", "phase": "p1", "task": {"type": "job"}}],
+            },
         )
 
         storage.create_config.assert_called_once()

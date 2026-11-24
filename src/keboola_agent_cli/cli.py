@@ -1,53 +1,16 @@
-"""Typer root application with global options and subcommand registration."""
+"""Typer root application with global options. The commands are in ``root_command.COMMANDS``."""
 
+import importlib
 import logging
+import re
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import typer
 
 from . import telemetry
-from .commands.agent import agent_app
-from .commands.auth import auth_app
-from .commands.billing import billing_app
-from .commands.branch import branch_app
-from .commands.changelog import changelog_command
-from .commands.cls import cls_app
-from .commands.component import component_app
-from .commands.config import config_app
-from .commands.context import context_command
-from .commands.data_app import data_app_app
-from .commands.dev_portal import dev_portal_app
-from .commands.docs import docs_app
-from .commands.doctor import doctor_command
-from .commands.encrypt import encrypt_app
-from .commands.feature import feature_app
-from .commands.flow import flow_app
-from .commands.http_client import http_app
-from .commands.init import init_command
-from .commands.job import job_app
-from .commands.kai import kai_app
-from .commands.lineage import lineage_app
-from .commands.merge_request import merge_request_app
-from .commands.notification import notification_app
-from .commands.org import org_app
-from .commands.permissions import permissions_app
-from .commands.project import project_app
-from .commands.repl import repl_command
-from .commands.rls import rls_app
-from .commands.schedule import schedule_app
-from .commands.search import search_command
-from .commands.semantic_layer import semantic_layer_app
-from .commands.serve import serve_command
-from .commands.sharing import sharing_app
-from .commands.storage import storage_app
-from .commands.stream import stream_app
-from .commands.sync import sync_app
-from .commands.token import token_app
-from .commands.transformation import transformation_app
-from .commands.version import update_command, version_command
-from .commands.workspace import workspace_app
 from .config_store import ConfigStore, resolve_config_dir
 from .constants import ENV_CONFIG_DIR, ENV_CONVERSATION_ID, EXIT_PERMISSION_DENIED
 from .effective_branch import record_targets
@@ -59,45 +22,6 @@ from .output import OutputFormatter, force_utf8_when_redirected
 # tests) have imported it from `cli` since 0.22.0.
 from .permissions import PermissionEngine, apply_firewall_flags
 from .root_command import MissingCommandError, RootGroup
-from .services.agent_service import AgentService
-from .services.auth_service import AuthService
-from .services.billing_service import BillingService
-from .services.branch_service import BranchService
-from .services.cls_service import ClsService
-from .services.component_service import ComponentService
-from .services.config_service import ConfigService
-from .services.data_app_git_service import DataAppGitService
-from .services.data_app_service import DataAppService
-from .services.deep_lineage_service import DeepLineageService
-from .services.docs_service import DocsService
-from .services.doctor_service import DoctorService
-from .services.encrypt_service import EncryptService
-from .services.feature_service import FeatureService
-from .services.flow_service import FlowService
-from .services.http_forwarder_service import HttpForwarderService
-from .services.job_service import JobService
-from .services.kai_service import KaiService
-from .services.lineage_service import LineageService
-from .services.member_service import MemberService
-from .services.merge_request_service import MergeRequestService
-from .services.notification_service import NotificationService
-from .services.org_service import OrgService
-from .services.policy_binding_service import PolicyBindingService
-from .services.project_service import ProjectService
-from .services.repo_validate_service import RepoValidateService
-from .services.rls_service import RlsService
-from .services.schedule_service import ScheduleService
-from .services.search_service import SearchService
-from .services.semantic_layer_service import SemanticLayerService
-from .services.sharing_service import SharingService
-from .services.snapshot_service import SnapshotService
-from .services.storage_service import StorageService
-from .services.stream_service import StreamService
-from .services.sync_service import SyncService
-from .services.token_service import TokenService
-from .services.variables_service import VariablesService
-from .services.version_service import VersionService
-from .services.workspace_service import WorkspaceService
 
 # At import, not inside the root callback: Click renders `--help` while parsing,
 # before any callback runs, and `--help` is one of the surfaces that crashed.
@@ -114,68 +38,27 @@ app = typer.Typer(
     context_settings={"help_option_names": ["-h", "--help"]},
 )
 
-# -- Setup & Info --
-_SETUP = "Setup & Info"
-app.command("init", rich_help_panel=_SETUP)(init_command)
-app.command("doctor", rich_help_panel=_SETUP)(doctor_command)
-app.command("version", rich_help_panel=_SETUP)(version_command)
-app.command("update", rich_help_panel=_SETUP)(update_command)
-app.command("changelog", rich_help_panel=_SETUP)(changelog_command)
-app.command("context", rich_help_panel=_SETUP)(context_command)
-app.command("repl", rich_help_panel=_SETUP)(repl_command)
-app.command("serve", rich_help_panel=_SETUP)(serve_command)
-app.add_typer(permissions_app, name="permissions", rich_help_panel=_SETUP)
-app.add_typer(auth_app, name="auth", rich_help_panel=_SETUP)
 
-# -- Project Management --
-_PROJ = "Project Management"
-app.add_typer(project_app, name="project", rich_help_panel=_PROJ)
-app.add_typer(org_app, name="org", rich_help_panel=_PROJ)
-app.add_typer(feature_app, name="feature", rich_help_panel=_PROJ)
-app.add_typer(token_app, name="token", rich_help_panel=_PROJ)
-app.add_typer(billing_app, name="billing", rich_help_panel=_PROJ)
+def __getattr__(name: str) -> Any:
+    """A service class, imported on first use; tests patch it here (``cli.JobService``)."""
+    if not name.endswith("Service"):
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+    return getattr(importlib.import_module(f".services.{module}", __package__), name)
 
-# -- Browse & Inspect --
-_BROWSE = "Browse & Inspect"
-app.add_typer(component_app, name="component", rich_help_panel=_BROWSE)
-app.add_typer(config_app, name="config", rich_help_panel=_BROWSE)
-app.command(
-    "search",
-    rich_help_panel=_BROWSE,
-    help="Search for items (tables, buckets, configs, flows, …) by name or content.",
-    no_args_is_help=True,
-)(search_command)
-app.add_typer(data_app_app, name="data-app", rich_help_panel=_BROWSE)
-app.add_typer(job_app, name="job", rich_help_panel=_BROWSE)
-app.add_typer(storage_app, name="storage", rich_help_panel=_BROWSE)
-app.add_typer(stream_app, name="stream", rich_help_panel=_BROWSE)
-app.add_typer(sharing_app, name="sharing", rich_help_panel=_BROWSE)
-app.add_typer(lineage_app, name="lineage", rich_help_panel=_BROWSE)
-app.add_typer(kai_app, name="kai", rich_help_panel=_BROWSE)
-app.add_typer(docs_app, name="docs", rich_help_panel=_BROWSE)
-app.add_typer(transformation_app, name="transformation", rich_help_panel=_BROWSE)
 
-# -- Flows --
-_FLOWS = "Flows"
-app.add_typer(flow_app, name="flow", rich_help_panel=_FLOWS)
-app.add_typer(schedule_app, name="schedule", rich_help_panel=_FLOWS)
-app.add_typer(notification_app, name="notification", rich_help_panel=_FLOWS)
+class _Services(dict[str, Any]):
+    """``ctx.obj``: ``ctx.obj["job_service"]`` builds ``JobService`` on its first use."""
 
-# -- Development --
-_DEV = "Development"
-app.add_typer(branch_app, name="branch", rich_help_panel=_DEV)
-app.add_typer(merge_request_app, name="merge-request", rich_help_panel=_DEV)
-app.add_typer(merge_request_app, name="mr", rich_help_panel=_DEV, hidden=True)
-app.add_typer(workspace_app, name="workspace", rich_help_panel=_DEV)
-app.add_typer(sync_app, name="sync", rich_help_panel=_DEV)
-app.add_typer(encrypt_app, name="encrypt", rich_help_panel=_DEV)
-app.add_typer(semantic_layer_app, name="semantic-layer", rich_help_panel=_DEV)
-app.add_typer(semantic_layer_app, name="sl", rich_help_panel=_DEV, hidden=True)
-app.add_typer(rls_app, name="rls", rich_help_panel=_DEV)
-app.add_typer(cls_app, name="cls", rich_help_panel=_DEV)
-app.add_typer(http_app, name="http", rich_help_panel=_DEV)
-app.add_typer(agent_app, name="agent", rich_help_panel=_DEV)
-app.add_typer(dev_portal_app, name="dev-portal", rich_help_panel=_DEV)
+    def __missing__(self, key: str) -> Any:
+        if not key.endswith("_service"):
+            raise KeyError(key)
+        service_class = getattr(sys.modules[__name__], key.title().replace("_", ""))
+        if key in ("version_service", "http_forwarder_service"):
+            self[key] = service_class()
+        else:
+            self[key] = service_class(config_store=self["config_store"])
+        return self[key]
 
 
 def _version_callback(value: bool) -> None:
@@ -309,7 +192,7 @@ def main(
         is_interactive = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
         if is_interactive:
             # Defer REPL launch until after context setup (below)
-            ctx.ensure_object(dict)
+            ctx.ensure_object(_Services)
             ctx.obj["_launch_repl"] = True
         else:
             # Non-interactive: show help
@@ -342,46 +225,6 @@ def main(
     resolved_dir, source = resolve_config_dir(cli_config_dir=config_dir)
     config_store = ConfigStore(config_dir=resolved_dir, source=source)
 
-    project_service = ProjectService(config_store=config_store)
-    component_service = ComponentService(config_store=config_store)
-    config_service = ConfigService(config_store=config_store)
-    job_service = JobService(config_store=config_store)
-    lineage_service = LineageService(config_store=config_store)
-    deep_lineage_service = DeepLineageService(config_store=config_store)
-    org_service = OrgService(config_store=config_store)
-    member_service = MemberService(config_store=config_store)
-    feature_service = FeatureService(config_store=config_store)
-    branch_service = BranchService(config_store=config_store)
-    merge_request_service = MergeRequestService(config_store=config_store)
-    sharing_service = SharingService(config_store=config_store)
-    search_service = SearchService(config_store=config_store)
-    snapshot_service = SnapshotService(config_store=config_store)
-    storage_service = StorageService(config_store=config_store)
-    stream_service = StreamService(config_store=config_store)
-    token_service = TokenService(config_store=config_store)
-    sync_service = SyncService(config_store=config_store)
-    variables_service = VariablesService(config_store=config_store)
-    encrypt_service = EncryptService(config_store=config_store)
-    flow_service = FlowService(config_store=config_store)
-    schedule_service = ScheduleService(config_store=config_store)
-    notification_service = NotificationService(config_store=config_store)
-    workspace_service = WorkspaceService(config_store=config_store)
-    data_app_service = DataAppService(config_store=config_store)
-    data_app_git_service = DataAppGitService(config_store=config_store)
-    semantic_layer_service = SemanticLayerService(config_store=config_store)
-    rls_service = RlsService(config_store=config_store)
-    cls_service = ClsService(config_store=config_store)
-    policy_binding_service = PolicyBindingService(config_store=config_store)
-    repo_validate_service = RepoValidateService(config_store=config_store)
-    kai_service = KaiService(config_store=config_store)
-    docs_service = DocsService(config_store=config_store)
-    doctor_service = DoctorService(config_store=config_store)
-    version_service = VersionService()
-    http_forwarder_service = HttpForwarderService()
-    agent_service = AgentService(config_store=config_store)
-    auth_service = AuthService(config_store=config_store)
-    billing_service = BillingService(config_store=config_store)
-
     try:
         config = config_store.load()
         persisted_policy = config.permissions
@@ -396,7 +239,7 @@ def main(
     )
     permission_engine = PermissionEngine(session_policy)
 
-    ctx.ensure_object(dict)
+    ctx.ensure_object(_Services)
     ctx.obj["formatter"] = formatter
     ctx.obj["json_output"] = json_output
     ctx.obj["permission_engine"] = permission_engine
@@ -406,45 +249,6 @@ def main(
     ctx.obj["deny_destructive"] = deny_destructive
     ctx.obj["allow_env_manage_token"] = allow_env_manage_token
     ctx.obj["config_store"] = config_store
-    ctx.obj["project_service"] = project_service
-    ctx.obj["component_service"] = component_service
-    ctx.obj["config_service"] = config_service
-    ctx.obj["job_service"] = job_service
-    ctx.obj["lineage_service"] = lineage_service
-    ctx.obj["deep_lineage_service"] = deep_lineage_service
-    ctx.obj["org_service"] = org_service
-    ctx.obj["member_service"] = member_service
-    ctx.obj["feature_service"] = feature_service
-    ctx.obj["branch_service"] = branch_service
-    ctx.obj["merge_request_service"] = merge_request_service
-    ctx.obj["sharing_service"] = sharing_service
-    ctx.obj["search_service"] = search_service
-    ctx.obj["snapshot_service"] = snapshot_service
-    ctx.obj["storage_service"] = storage_service
-    ctx.obj["stream_service"] = stream_service
-    ctx.obj["token_service"] = token_service
-    ctx.obj["sync_service"] = sync_service
-    ctx.obj["variables_service"] = variables_service
-    ctx.obj["encrypt_service"] = encrypt_service
-    ctx.obj["flow_service"] = flow_service
-    ctx.obj["schedule_service"] = schedule_service
-    ctx.obj["notification_service"] = notification_service
-    ctx.obj["workspace_service"] = workspace_service
-    ctx.obj["data_app_service"] = data_app_service
-    ctx.obj["data_app_git_service"] = data_app_git_service
-    ctx.obj["semantic_layer_service"] = semantic_layer_service
-    ctx.obj["rls_service"] = rls_service
-    ctx.obj["cls_service"] = cls_service
-    ctx.obj["policy_binding_service"] = policy_binding_service
-    ctx.obj["repo_validate_service"] = repo_validate_service
-    ctx.obj["kai_service"] = kai_service
-    ctx.obj["docs_service"] = docs_service
-    ctx.obj["doctor_service"] = doctor_service
-    ctx.obj["version_service"] = version_service
-    ctx.obj["http_forwarder_service"] = http_forwarder_service
-    ctx.obj["agent_service"] = agent_service
-    ctx.obj["auth_service"] = auth_service
-    ctx.obj["billing_service"] = billing_service
 
     # Warn if empty local config shadows global with projects (#104)
     if source == "local" and not json_output and ctx.invoked_subcommand != "init":

@@ -14,7 +14,7 @@ from typer.testing import CliRunner
 from keboola_agent_cli.cli import app
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.errors import KeboolaApiError
-from keboola_agent_cli.models import AppConfig, ProjectConfig
+from keboola_agent_cli.models import AppConfig, ImportMethod, ProjectConfig
 from keboola_agent_cli.services.storage_service import StorageService
 
 runner = CliRunner()
@@ -422,6 +422,7 @@ class TestLoadFileToTableService:
             branch_id=None,
             wait=True,
             max_wait=None,
+            import_method=ImportMethod.auto,
         )
 
     def test_load_incremental(self, tmp_path: Path) -> None:

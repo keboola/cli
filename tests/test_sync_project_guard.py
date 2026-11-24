@@ -18,6 +18,7 @@ from keboola_agent_cli.errors import ConfigError, KeboolaApiError
 from keboola_agent_cli.models import ProjectConfig, TokenVerifyResponse
 from keboola_agent_cli.services.project_service import ProjectService
 from keboola_agent_cli.services.sync_service import SyncService
+from keboola_agent_cli.sync.clone import is_fresh_target
 from keboola_agent_cli.sync.manifest import load_manifest
 
 STACK_URL = "https://connection.keboola.com"
@@ -334,7 +335,11 @@ class TestCloneTargetWithoutStoredId:
         assert load_manifest(target_dir).project.id == 258
 
     def test_failed_verification_leaves_no_target_and_retry_succeeds(self, tmp_path: Path) -> None:
-        """A failed verification on a fresh clone writes nothing, so a retry starts fresh."""
+        """A failed verification on a fresh clone writes nothing, so a retry starts fresh.
+
+        Nothing but the target's own directory lock (#827 follow-up): a target
+        holding only ``.keboola/lock/`` is still a fresh one.
+        """
         source = tmp_path / "golden"
         _write_manifest(source, project_id=999)
         target_dir = tmp_path / "clone"
@@ -353,7 +358,8 @@ class TestCloneTargetWithoutStoredId:
                 target_dir=target_dir,
                 overrides={"create_buckets": False},
             )
-        assert not target_dir.exists()
+        assert is_fresh_target(target_dir)
+        assert not (target_dir / ".keboola" / "manifest.json").exists()
 
         client.verify_token.side_effect = None
         result = svc.clone_project(

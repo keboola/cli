@@ -62,6 +62,31 @@ def effective_definition(table: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _reread_after_rejection(
+    client: Any,
+    error: KeboolaApiError,
+    table_id: str,
+    branch_id: int | None,
+) -> dict[str, Any] | None:
+    """Read the table again after a definition PUT that Storage rejected as invalid.
+
+    Storage answers a definition PUT that changes nothing with HTTP 400 and
+    ``DEFINITION_VALIDATION_ERROR_CODE``, but uses the same code for other
+    validation failures, so only the stored state can tell the two apart.
+    Returns ``None`` for any other error and for a failed re-read; the caller
+    then raises the original error.
+    """
+    if error.status_code != 400:
+        return None
+    if error.details.get("api_error_code") != DEFINITION_VALIDATION_ERROR_CODE:
+        return None
+    try:
+        return client.get_table_detail(table_id, branch_id=branch_id)
+    except KeboolaApiError:
+        logger.debug("%s: re-read after a rejected write failed", table_id, exc_info=True)
+        return None
+
+
 def is_unchanged_description(
     client: Any,
     error: KeboolaApiError,
@@ -71,25 +96,32 @@ def is_unchanged_description(
 ) -> bool:
     """Whether a rejected table-description write left the requested text in place.
 
-    Storage answers a definition PUT that changes nothing with HTTP 400 and
-    ``DEFINITION_VALIDATION_ERROR_CODE``, but uses the same code for other
-    validation failures. The table is read again and only a stored
-    ``definition.description`` equal to ``description`` counts as unchanged.
-    A failed re-read counts as not unchanged, so the caller raises the
-    original error.
+    Only a stored ``definition.description`` equal to ``description`` counts
+    as unchanged (see ``_reread_after_rejection``).
     """
-    if error.status_code != 400:
-        return False
-    if error.details.get("api_error_code") != DEFINITION_VALIDATION_ERROR_CODE:
-        return False
-    try:
-        table = client.get_table_detail(table_id, branch_id=branch_id)
-    except KeboolaApiError:
-        logger.debug(
-            "describe_table %s: re-read after a rejected write failed", table_id, exc_info=True
-        )
+    table = _reread_after_rejection(client, error, table_id, branch_id)
+    if table is None:
         return False
     return (effective_definition(table).get("description") or "") == description
+
+
+def is_unchanged_columns(
+    client: Any,
+    error: KeboolaApiError,
+    table_id: str,
+    columns: dict[str, str],
+    branch_id: int | None,
+) -> bool:
+    """Whether a rejected column-description write left every requested text in place.
+
+    Only stored column descriptions equal to all of ``columns`` count as
+    unchanged (see ``_reread_after_rejection``).
+    """
+    table = _reread_after_rejection(client, error, table_id, branch_id)
+    if table is None:
+        return False
+    stored = native_column_descriptions(table)
+    return all(stored.get(name, "") == text for name, text in columns.items())
 
 
 def column_definition(column: Any) -> dict[str, Any]:
@@ -201,9 +233,12 @@ def write_column_descriptions(
 ) -> dict[str, Any]:
     """Write ``columns`` through the native endpoint, migrating legacy siblings.
 
-    Returns ``{"migrated": {col: desc}, "skipped": [...], "result": job}``.
-    Raises ``ValueError`` for column names the table does not have -- before
-    any write happens.
+    Returns ``{"migrated": {col: desc}, "skipped": [...], "result": job,
+    "status": "updated" | "unchanged"}``. ``result`` is ``None`` when Storage
+    rejected the write because every description was already stored;
+    ``status`` is ``"unchanged"`` only when, in addition, no legacy entry was
+    deleted. Raises ``ValueError`` for column names the table does not have --
+    before any write happens.
     """
     table = client.get_table_detail(table_id, branch_id=branch_id)
 
@@ -231,14 +266,20 @@ def write_column_descriptions(
             deletable_ids.add(str(entry.get("id")))
 
     payload = {**migratable, **columns}
-    result = client.update_table_definition(
-        table_id=table_id,
-        columns=[{"name": name, "description": desc} for name, desc in payload.items()],
-        is_description_system_managed=False,
-        branch_id=branch_id,
-    )
+    try:
+        result = client.update_table_definition(
+            table_id=table_id,
+            columns=[{"name": name, "description": desc} for name, desc in payload.items()],
+            is_description_system_managed=False,
+            branch_id=branch_id,
+        )
+    except KeboolaApiError as exc:
+        if not is_unchanged_columns(client, exc, table_id, payload, branch_id):
+            raise
+        result = None
     skipped.extend(delete_legacy_entries(client, table_id, deletable, branch_id=branch_id))
-    return {"migrated": migratable, "skipped": skipped, "result": result}
+    status = "unchanged" if result is None and not deletable else "updated"
+    return {"migrated": migratable, "skipped": skipped, "result": result, "status": status}
 
 
 def migrate_candidates(
@@ -430,7 +471,9 @@ class ColumnDescriptionsMixin(BaseService):
 
         Returns:
             Dict with project_alias, table_id, columns, migrated, skipped,
-            result (the completed storage job), message.
+            status (``"updated"`` after a write, ``"unchanged"`` when Storage
+            already held every description), result (the completed storage
+            job, None when Storage made no change), message.
         """
         branch_id = resolve_branch(self._config_store, alias, branch_id)
         if not columns:
@@ -444,7 +487,14 @@ class ColumnDescriptionsMixin(BaseService):
             client.close()
 
         migrated = outcome["migrated"]
-        message = f"Described {len(columns)} column(s) on '{table_id}' in project '{alias}'."
+        status = outcome["status"]
+        if status == "unchanged":
+            message = (
+                f"Column descriptions unchanged on '{table_id}' in project '{alias}' "
+                f"({len(columns)} column(s))."
+            )
+        else:
+            message = f"Described {len(columns)} column(s) on '{table_id}' in project '{alias}'."
         if migrated:
             message += f" Migrated {len(migrated)} legacy entry(ies)."
         return {
@@ -453,6 +503,7 @@ class ColumnDescriptionsMixin(BaseService):
             "columns": columns,
             "migrated": migrated,
             "skipped": outcome["skipped"],
+            "status": status,
             "result": outcome["result"],
             "message": message,
         }

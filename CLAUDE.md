@@ -66,7 +66,7 @@ src/keboola_agent_cli/
                         #   populate_by_name); the semver-stable shapes consumers type against (issue #428).
   py.typed              # PEP 561 marker -- ships in the wheel so downstream mypy/ty treat the SDK as typed.
   __main__.py           # python -m support
-  cli.py                # Typer root app, global options, subcommand wiring
+  cli.py                # Typer root app, global options; ctx.obj builds a service on first use
   constants.py          # Shared constants + dynamic APP_NAME resolution (retry params, timeouts, defaults)
   json_utils.py         # Deep-merge, set_nested_value, compute_diff utilities
   models.py             # Pydantic models shared across layers
@@ -77,6 +77,7 @@ src/keboola_agent_cli/
   output.py             # OutputFormatter: JSON vs Rich dual-mode output
   root_command.py       # RootGroup: one --json document per exit, root flags after the subcommand,
                         #   -h, the repeated-option check (#791 O1/O7/A6/H5)
+                        #   COMMANDS: the top-level commands; a module is imported on first use (#801)
   errors.py             # KeboolaApiError, ConfigError, ErrorCode enum, mask_token()
   config_store.py       # JSON persistence for config.json (0600 permissions)
   permissions.py        # PermissionEngine (--deny-writes / --deny-destructive session firewall)
@@ -259,7 +260,7 @@ Full author checklist: see `CONTRIBUTING.md` > "Releasing a beta (pre-release) v
 
 5. **Error handling**: commands catch `KeboolaApiError` and `ConfigError`, map them to the appropriate exit code, and output structured errors in JSON mode. Report a `KeboolaApiError` with `emit_api_error(formatter, exc)` (`commands/_helpers.py`), which keeps its `retryable` and `details`. `tests/test_error_forwarding.py` fails on a handler that drops them.
 
-6. **Exit codes**: 0=success, 1=general error, 2=usage error, 3=auth error, 4=network error, 5=config error, 6=permission denied, 7=job timed out and cancelled (`JOB_TIMEOUT_TERMINATED`), 130=interrupted. [`docs/error-codes.md`](docs/error-codes.md) is the one list of error codes with their exit code and error type. `ERROR_CODE_TABLE` in `errors.py` holds the same pairs and `map_error_to_exit_code` reads it. `make check-error-codes` keeps the two equal.
+6. **Exit codes**: 0=success, 1=general error, 2=usage error, 3=auth error, 4=network error, 5=config error, 6=permission denied, 7=job timed out and a kill was accepted (`JOB_TIMEOUT_TERMINATED`), 130=interrupted. [`docs/error-codes.md`](docs/error-codes.md) is the one list of error codes with their exit code and error type. `ERROR_CODE_TABLE` in `errors.py` holds the same pairs and `map_error_to_exit_code` reads it. `make check-error-codes` keeps the two equal.
 
 7. **Token masking**: tokens are never printed in full. Use `mask_token()` from `errors.py`.
 
@@ -588,6 +589,19 @@ kbagent project edit [--project NAME] [--url URL] [--token-stdin | --token-file 
 kbagent project status [--project NAME | --all-projects]
 kbagent project refresh [--project ALIAS] [--dry-run] [--force] [--yes] [--token-description DESC] [--token-expires-in N]
 kbagent project refresh --all-projects [--dry-run] [--force] [--yes] [--token-description DESC] [--token-expires-in N]
+# project refresh (#955): in a local .kbagent/ (config dir not the global one, compared by resolved
+#   path; also with --config-dir / KBAGENT_CONFIG_DIR) a project whose token is INVALID_TOKEN first takes
+#   the one distinct verified token the global config holds for the same project_id + normalized stack
+#   (projects_adopted: alias, project_id, project_name, global_alias, action; never a token). A transient
+#   check error, --force, several global tokens or a failed verify mint as before. A global token is
+#   taken only when it is a master token or has all five rights a minted token gets (canManageBuckets,
+#   canReadAllFileUploads, canReadAllProjectEvents, canManageDevBranches, canManageTokens); a weaker one
+#   is minted for, entry key global_token_not_used {global_alias, reason: scoped}. Two phases: check and
+#   plan, then the Manage token (lazy provider manage_token_if_available, once, only when minting, before
+#   any write; a provider exception = nothing written; None = adoptions written, every mint is a
+#   projects_failed MANAGE_TOKEN_REQUIRED entry, exit 1), then writes. An adoption is written only if the
+#   alias is unchanged since the plan (else projects_failed, CONFIG_ERROR). The global config is never
+#   written. org setup --refresh and POST /org/refresh do not consult it. Version gate lives in gotchas.md.
 kbagent project description-get [--project NAME]
 kbagent project description-set [--project NAME] (--description STR | --description-file PATH)
 kbagent project use ALIAS
@@ -619,6 +633,12 @@ kbagent config rename [--project NAME] --component-id ID --config-id ID --name "
 kbagent config delete [--project NAME] --component-id ID --config-id ID [--branch ID] [--dry-run]
 kbagent config restore [--project NAME] --component-id ID --config-id ID [--branch ID]
 kbagent config trash-list [--project NAME] [--component-id ID] [--branch ID]
+# config new --push / update / clone on keboola.flow: the body (after --set / merge) gets the semantic
+#   checks of flow new/update (services/_flow_config_check.py, no schema fetch) -> INVALID_FLOW_DEFINITION,
+#   exit 1, nothing written, dry run too; every written body is checked ({} too); not checked: config new
+#   without --configuration (empty flow), a metadata-only update, clone without --set; config new
+#   --no-validate skips it. config update / row-update --merge '{}' merge nothing (was: an empty full
+#   replace). sync push is not covered. Version gate in gotchas.md.
 # config delete (0.89.0+ safety): SOFT delete into the Storage trash, with a locate-first guard.
 #   The raw API purges PERMANENTLY when DELETE hits a config already in the trash -- the classic
 #   agent retry after a timeout. kbagent now looks the config up first: live -> trash it;
@@ -712,6 +732,10 @@ kbagent job run [--project NAME] --component-id ID --config-id ID [--row-id ID .
 kbagent job terminate [--project NAME] (--job-id ID [--job-id ID ...] | --status any|created|waiting|processing [--component-id ID] [--config-id ID] [--branch ID] [--limit N]) [--dry-run] [--yes]
 # job terminate --status --branch 0 (CLI-21): matches only jobs whose branchId is the default branch
 #   ID (read from GET /v2/storage/dev-branches). Before, it matched no job. Version gate in gotchas.md.
+# job run --component-id keboola.flow: reads the flow first and refuses one the job queue refuses for
+#   every run (repeated phase/task id, goto to an undefined phase, not exactly one first phase) with
+#   INVALID_FLOW_DEFINITION, exit 1, before the create (check_runnable_flow, shared with flow run; the
+#   same read resolves the variables). Version gate in gotchas.md.
 # job run --idempotency-key: a pending entry is recorded BEFORE the create. A definite failure (4xx,
 #   refused connection, connect timeout) removes it; an unknown outcome (read timeout, 5xx, exhausted
 #   retries) keeps it, because the job may exist. A replay that finds the pending entry exits with INVALID_ARGUMENT (1 before 1.0.0, 2 from 1.0.0, HTTP 400 over serve) and
@@ -743,7 +767,7 @@ kbagent storage table-detail [--project NAME] --table-id ID [--branch ID]
 kbagent storage create-bucket [--project NAME] --stage STAGE --name NAME [--description D] [--backend B] [--branch ID]
 kbagent storage create-table [--project NAME] --bucket-id ID --name NAME [--column COL:TYPE[(length)] ...] [--primary-key COL] [--not-null-column COL ...] [--default NAME=VALUE ...] [--source-table-id ID] [--source-branch-id N] [--time-partitioning-type DAY|HOUR|MONTH|YEAR] [--time-partitioning-field COL] [--time-partitioning-expiration-ms MS] [--range-partitioning-field COL --range-partitioning-start S --range-partitioning-end E --range-partitioning-interval I] [--clustering-field COL ...] [--branch ID] [--if-not-exists] [--timeout SECONDS]
 # --column XOR --source-table-id (0.66.0+, BigQuery only): --source-table-id copies an existing table's data into the requested partition/clustering layout (schema derived from source) -> swap into place with swap-tables. Partition/clustering flags work in both modes (BigQuery only); time vs range partitioning are mutually exclusive. A non-BigQuery project fails fast (pre-flight backend check).
-kbagent storage upload-table [--project NAME] --table-id ID --file PATH [--incremental] [--delimiter D] [--enclosure E] [--no-auto-create] [--wait/--no-wait] [--timeout SECONDS] [--branch ID] [--progress]
+kbagent storage upload-table [--project NAME] --table-id ID --file PATH [--incremental] [--delimiter D] [--enclosure E] [--no-auto-create] [--import-method auto|single_statement|multi_statement] [--wait/--no-wait] [--timeout SECONDS] [--branch ID] [--progress]
 # upload-table / file-upload cloud upload (#834): on AWS stacks a file above 64 MiB goes up as an S3
 #   MULTIPART upload -- 64 MiB parts (auto-scaled so the file fits in 10,000 parts), 4 in parallel,
 #   per-part retry on 429/5xx/transport errors, peak memory ~4 x part size. Before, the whole file was
@@ -818,7 +842,7 @@ kbagent storage describe-migrate [--project ALIAS] [--table-id ID ...] [--bucket
 # Table descriptions and column types (since 1.2.0, DMD-2439): describe-table (and describe-batch `tables:`)
 #   write `definition.description` through the same definition PUT as describe-column, with
 #   isDescriptionSystemManaged=false and no KBC.description row; the result reports status "updated", or
-#   "unchanged" (result null, human "Description unchanged") when Storage rejects the PUT with code
+#   "unchanged" (result null, human "Success: No change: ...") when Storage rejects the PUT with code
 #   storage.tables.definitionUpdateValidationFailed AND a re-read shows the same text; any other 400
 #   (same code, different stored text) is raised. table-detail reads the table description from `definition.description` only, column
 #   descriptions from `definition.columns[]` then the legacy flat key (columnMetadata KBC.description is
@@ -837,7 +861,10 @@ kbagent storage describe-migrate [--project ALIAS] [--table-id ID ...] [--bucket
 #   and warns in human mode when legacy keys remain; it never writes. `describe-migrate` converts
 #   legacy keys in bulk (scope: --table-id / --bucket-id / whole project; scan-then-confirm,
 #   --dry-run reports only; per-table errors accumulate). describe-column/describe-batch also migrate
-#   leftovers on the table they touch. Rules: a column whose visible description already differs is
+#   leftovers on the table they touch. describe-column and describe-batch `columns:` report `status`
+#   like describe-table: "unchanged" (result null) when Storage rejects the PUT with the same code AND a
+#   re-read shows every requested text; before, that case failed with HTTP 400. Version gate in gotchas.md.
+#   Rules: a column whose visible description already differs is
 #   skipped as `conflict` (newer value wins), an entry for a dropped column is skipped as `orphan`
 #   unless --prune-orphans. Migrated flat entries are DELETED so a later clear cannot be resurrected
 #   by the read fallback.
@@ -856,7 +883,17 @@ kbagent storage file-download [--project NAME] [--file-id ID | --tag TAG ...] [-
 kbagent storage file-detail [--project NAME] --file-id ID
 kbagent storage file-delete [--project NAME] --file-id ID [--file-id ...] [--dry-run] [--yes]
 kbagent storage file-tag [--project NAME] --file-id ID [--add TAG ...] [--remove TAG ...]
-kbagent storage load-file [--project NAME] --file-id ID --table-id ID [--incremental] [--delimiter D] [--enclosure E] [--wait/--no-wait] [--timeout SECONDS] [--branch ID]
+kbagent storage load-file [--project NAME] --file-id ID --table-id ID [--incremental] [--delimiter D] [--enclosure E] [--import-method auto|single_statement|multi_statement] [--wait/--no-wait] [--timeout SECONDS] [--branch ID]
+# --import-method on upload-table / load-file (DMD-2856): sent to import-async as importMethod, except auto (the
+#   default: nothing is sent, the platform default applies). single_statement = one MERGE / INSERT OVERWRITE,
+#   multi_statement = deduplication table + separate statements. Snowflake only: upload-table (and the SDK
+#   Client.upload_table) first read the bucket's backend (a missing bucket it will create: the project default
+#   backend; services/_import_method.py) and refuse another backend with INVALID_ARGUMENT (exit 2, HTTP 400 over
+#   serve) before creating or uploading anything. When no backend can be read, Storage's 400
+#   storage.tables.importMethodNotSupported is mapped to the same INVALID_ARGUMENT (services/_storage_jobs.py), whose
+#   load-file recovery command leaves the method out; load-file relies on that 400 (it writes nothing first). With
+#   auto that 400 stays an API error. The result carries import_method. serve: import_method form field (upload) / body field (load-to-table). Output-mapping key
+#   import_method: plugins/kbagent/skills/kbagent/references/import-method-workflow.md. Version gate in gotchas.md.
 kbagent storage job-detail [--project NAME] --job-id ID [--wait] [--timeout SECONDS]
 # storage job-detail (#834): read-class; shows a Storage API job (status, operation_name, table_id,
 #   file_id, times, imported_rows, warnings, results, error). Exit 0 success/waiting/processing, exit 1
@@ -1135,6 +1172,10 @@ kbagent workspace create [--project ALIAS] [--name NAME] [--backend TYPE] [--ui]
 #   gate for this entry lives in gotchas.md (these `# ` lines parse as ATX headings).
 kbagent workspace list [--project NAME ... | --all-projects] [--orphaned] [--branch ID] [--qs-compatible]
 kbagent workspace detail [--project ALIAS] --workspace-id ID [--branch ID]
+# workspace list / detail: each workspace also carries creator_token_id, creator_token_description, actor,
+#   last_activity_at, state, warn_at, deactivate_at, delete_at -- passed through from the Storage API
+#   (services/_workspace_fields.py), null when the stack omits them. Human mode: Token / Last activity
+#   columns in list, three rows in detail. Version gate lives in gotchas.md.
 kbagent workspace delete [--project ALIAS] --workspace-id ID [--dry-run] [--yes]
 kbagent workspace password [--project ALIAS] --workspace-id ID
 kbagent workspace load [--project ALIAS] --workspace-id ID --table-id TABLE_ID [--table-id ...] [--preserve] [--load-type clone|copy|view] [--force] [--timeout SECONDS]
@@ -1320,6 +1361,29 @@ kbagent sync push [--project ALIAS] [--all-projects] [--dry-run] [--force] [--al
 # sync push encryption (#792 F): every #-secret is encrypted before the first write, so an
 #   ENCRYPTION_FAILED stops push before anything reaches the remote (the message ends with "Nothing
 #   was pushed.") and a retry creates nothing twice. Version gate in gotchas.md.
+# sync push update (#827): a `modified` config's PUT carries If-Match with the version diff read
+#   (`remote_version`, also on modified changes; promote path: the target branch's version; none when
+#   the listing has no version). A 412 reads the config back: exactly the sent configuration/name/
+#   description/enabled state = done (a transport retry after a lost answer), else an errors[]
+#   SYNC_CONFLICT (exit 1) with the local files and manifest entry untouched, and no later phase of
+#   that push writes the config or its rows (Phase B row writes get their own SYNC_CONFLICT entry;
+#   promote rebind and Phase C/D link recovery skip it). Push reads a config's
+#   files once: a change while it reads is SYNC_LOCAL_FILE_CHANGED (nothing sent). An edit during
+#   the PUT skips the writeback (warnings[] LOCAL_EDIT_DURING_PUSH; manifest records what was sent).
+#   Stamps are hashes of the bytes push wrote (_config.yml, pyproject.toml), never a re-read; the
+#   promote final stamp reuses them. Row PUTs and link backfill PUTs stay unconditional.
+#   Version gate lives in gotchas.md.
+# sync pull stale removal (#827): pull records each stale config/row folder, saves the manifest
+#   without it and with `pendingRemovals`, then deletes; the final save keeps only failed deletes.
+#   Diff/push treat a pending path (and below) as absent; the next pull finishes it first, only while
+#   unchanged (else kept AND still recorded, warnings[] PENDING_REMOVAL_KEPT / PENDING_REMOVAL_FAILED;
+#   a folder tracked again drops its record). A folder inside another planned one goes with it.
+#   A record with an unsafe path (absolute, drive, `..`, unknown tree, escapes its tree, row outside
+#   its rows folder) is dropped and never acted on (PENDING_REMOVAL_INVALID); a folder reached through
+#   a symlink is not deleted and keeps its record; a record whose delete fails again stays; dry-run
+#   pull lists records it did not process; commit re-checks each folder, an outer one with every
+#   recorded folder inside it. A pending folder never hides a tracked config/row folder inside it.
+#   Version gate lives in gotchas.md.
 # sync push workspace delete (CLI-25): in a `syncWorkspaces` tree, a `push --force` that deletes a shared SQL workspace also deletes its SQL editor sessions (every user's, push branch) and their backend workspaces, which `config restore` does not bring back; `push --dry-run --force` lists them (warnings[] workspace_sessions), a plain push lists the workspace under skipped_deletions and touches no session. `--force` is destructive-class (FLAG_ESCALATIONS `sync.push --force`), so `--deny-destructive` / a cli:destructive deny blocks it while a plain push stays write-class. Version gate for this entry lives in gotchas.md.
 # Partial failures change the exit code (#745): commands that collect per-item failures
 #   and keep going exit 1 (was 0) when at least one item failed:
@@ -1365,6 +1429,21 @@ kbagent sync push [--project ALIAS] [--all-projects] [--dry-run] [--force] [--al
 #   match the --project project (also --all-projects), else CONFIG_ERROR (exit 5) naming both project IDs, before
 #   any API call. A project without a stored project_id costs one token verification call. Copy configs between
 #   projects with `sync clone`. Version gate lives in gotchas.md (no `(since vNEXT)` on `# ` lines).
+# sync directory lock (#827 follow-up): init/pull (its auto-init too)/push/diff/status/branch-*/clone
+#   (source while copied, unlocked when this user cannot write it; target for the whole clone), config new --output-dir into a tree (before
+#   --push creates the config) and config rename --directory (before the remote rename) hold
+#   .keboola/lock/sync.lock (an OS lock via filelock's native class, file kept, lock/ ignores itself
+#   in git; per-thread ownership, the owner thread nests). A second run fails at once with
+#   SYNC_DIRECTORY_BUSY (exit 1, conflict, retryable, details.directory/lock_file), also per project
+#   under --all-projects; a lock kbagent cannot create is CONFIG_ERROR (exit 5). sync/dir_lock.py.
+#   A folder without .keboola/: status/diff/push/branch-* stop with the no-manifest error first
+#   (REFUSE); config new/rename decide at their start: no .keboola/ then = a plain folder for the
+#   whole command (no lock, no manifest read or written). CREATE: init/pull.
+#   Row precheck: push Phase B (services/_sync_push_rows.py) reads each parent before its first
+#   row write; a version other than the diff's parent_remote_version (or push's own PUT answer),
+#   a 412-readback update, a missing version or a failed read blocks its rows (errors[]
+#   SYNC_CONFLICT or the read's code). The window after the check is not bounded. Version gate
+#   lives in gotchas.md.
 kbagent sync clone --source DIR --target ALIAS --target-dir DIR [--bucket-map FILE] [--variable-values FILE] [--instance-rename FILE] [--no-create-buckets] [--dry-run] [--branch ID]
 # `sync clone` (0.63.0+) copies a reference synced tree into a fresh target project + parameterizes it: applies bucket_map / variable_values / instance_rename overrides (JSON/YAML files), then pushes so every config CREATEs fresh -- keboola.flow and keboola.orchestrator task configIds (and configRowIds), schedule targets, and transformation variable and shared-code links are remapped reference->ULID by push Phase C/D (`link_remaps` counts each kind; a link it cannot set is an `errors[]` entry, and a failed PUT is sent again by the next push). Schedules are never activated and data apps never deployed: `warnings[]` (also on --dry-run, human mode prints them) lists those, copied `KBC::` values the target cannot decrypt, and tasks that run a config not in the tree. Only the run that creates the configs reports them; a re-run returns `warnings: []`. Idempotent: re-run with an existing --target-dir reports no_changes. Fails fast if the target already contains the reference's configs (clone needs a fresh target). Override files must be flat {id: scalar} mappings (0.89.0+): a nested mapping/list/null value is rejected with CONFIG_ERROR naming the key + actual type, instead of being silently stringified into a bogus ID. `--branch` is optional on a fresh clone. It defaults to the target's production branch, resolved from the API like `sync init`. An active branch set with `branch use` on the target wins over production. Pass `--branch` only to target a dev branch of the target. Clone recreates the reference tree's storage buckets in the target from the `storage/buckets.json` pull export BY DEFAULT -- `--no-create-buckets` skips it. Idempotent: an existing bucket is skipped, a per-bucket failure is collected in `bucket_errors`, a linked (shared) bucket is linked to the same source as in the reference (listed in `linked_buckets`; the source's sharing settings decide, a refused link lands in `bucket_errors`). Only the buckets are created, never their tables or data (the export carries no table data). Version gate in gotchas.md.
 kbagent sync branch-link [--project ALIAS] (--branch-id ID | --branch-name NAME) [--directory DIR]
@@ -1459,7 +1538,8 @@ kbagent semantic-layer token --encrypt [--project P] --component-id C
 #   otherwise) -- an ordinary token instead uses `scope request-create` + an org-admin's
 #   `scope set --scope organization`. Elevation is ONE-WAY (no downgrade endpoint), which is why
 #   every `--scope organization` (here and on `model create` / `add <kind>`) is destructive-class
-#   (FLAG_ESCALATIONS). `edit`, `import --overwrite` and `promote` update in place (PUT): an item
+#   (FLAG_ESCALATIONS). `edit` (a PATCH of only the keys passed, #833; `status` updated|unchanged, R6) and `import --overwrite` /
+#   `promote` (a whole-record PUT) update in place: an item
 #   keeps its id, scope, grants and pending elevation request. `scope add|remove` merge into the
 #   grants client-side (not atomic; refused from a project that does not own the item, because
 #   the server hides the grants from a non-owner -- use `scope set --target-project` there).
@@ -1641,6 +1721,15 @@ kbagent transformation edit [--project NAME] --config-id ID --change-description
 #   (add/remove/rename block+code, set_code, add_script, str_replace) applied sequentially against
 #   batch-start ids -- ALWAYS `transformation show` first, ids renumber after structural ops;
 #   --storage REPLACES configuration.storage wholesale; --dry-run previews without PUT.
+#   SELECT skip: the Snowflake/BigQuery transformation runtime skips a script[] statement whose
+#   comment-free text, leading whitespace ignored, starts with SELECT (Snowflake: whole word,
+#   since keboola/snowflake-transformation#42; BigQuery: first 6 chars). The job succeeds
+#   without running it.
+#   create/edit (also --dry-run) and `sync push` (configs it creates/updates, also --dry-run) add a
+#   warnings[] entry SQL_SELECT_SKIPPED_BY_RUNTIME per such statement ({code, message,
+#   component_id, config_id?, path?, statement: {block, code, index, excerpt}}); the write still
+#   happens. Rule in sync/sql_select_skip.py. config update/row-update do not check. Version gate
+#   lives in gotchas.md.
 
 kbagent docs query "QUESTION" [--project NAME]
 # (0.73.0+) Documentation Q&A via the AI Service (server-side RAG). Unlike kai ask it does NOT
@@ -1660,6 +1749,33 @@ kbagent flow delete [--project NAME] --flow-id ID [--branch ID] [--yes]
 kbagent flow schedule [--project NAME] --flow-id ID --cron "0 6 * * *" [--timezone TZ] [--disabled] [--branch ID]
 kbagent flow schedule-remove [--project NAME] --flow-id ID [--branch ID] [--yes]
 kbagent flow triggers [--project NAME] --flow-id ID [--branch ID]
+kbagent flow run [--project NAME] --flow-id ID [--task-id T ...] [--from-phase-id P] [--variable-values-id ID | --no-variables] [--branch ID] [--wait] [--timeout N] [--dry-run]
+# flow run (#725): a whole flow (no selector; same Queue body as `job run --component-id keboola.flow`)
+#   or a PARTIAL run: --task-id (repeatable) and/or --from-phase-id, sent as onlyFlowTaskIds (the UI's
+#   "Run selected tasks"). --from-phase-id follows DEFAULT transitions only (the next[] entry with no
+#   `condition` key); two defaults is INVALID_ARGUMENT (a goto to an unknown phase: see below), a cycle stops
+#   and sets selection.default_path_cycle. A partial run ignores conditions (warning
+#   PARTIAL_RUN_IGNORES_CONDITIONS); phases with an enabled task that are not on the default path and
+#   are reachable from it only through a conditional transition get CONDITIONAL_PHASES_SKIPPED.
+#   Blank/empty/comma selectors, unknown ids, a disabled task given by id, a task in an undefined
+#   phase, an empty selection, a selected phase the first phase cannot reach and needed phases that
+#   form a loop are INVALID_ARGUMENT (exit 2) before any POST; a flow the job queue refuses for every
+#   run (repeated phase/task id, goto to an undefined phase, not exactly one first phase) is
+#   INVALID_FLOW_DEFINITION (exit 1), dry run too. The flow config is
+#   read once (selection + variables); the branch is resolved once (0 = production). --wait on a
+#   partial run adds task_results + failed_task_ids and exits 1 (payload first, SELECTED_TASK_FAILED)
+#   when a selected task did not succeed or is missing from result.tasks; the flow status alone can
+#   hide that. A flow job that ended in `error` keeps QUEUE_JOB_FAILED (exit 1); task_results and
+#   failed_task_ids are then in error.details. The selection warnings stay on error envelopes too.
+#   A --timeout never kills the job: QUEUE_JOB_TIMEOUT, exit 4, retryable false, names
+#   `job detail`. Any other error after the job was created (a poll that fails with a connection
+#   error, HTTP 5xx, exhausted retries; in `job run` also a timeout whose kill failed) keeps its
+#   code and exit code, but is retryable false with details.job_id -- for job run --wait too.
+#   Permission key flow.run (write) also needs job.run (permissions.IMPLIED_OPERATIONS): a policy
+#   denying job.run blocks flow run, --dry-run and the REST route included.
+#   REST: POST /flows/{project}/{flow_id}/run (body task_ids/from_phase_id/branch_id/
+#   variable_values_id/no_variables/dry_run, query wait/timeout; unknown fields and query params 422;
+#   task_ids [] is 400). Version gate in gotchas.md.
 # flow triggers (#714): the honest answer to "what starts this flow automatically". A flow has at
 #   least three trigger mechanisms and kbagent used to see ONE: `schedule list` / `search` only ever
 #   read `keboola.scheduler` configs, so a flow driven by a TABLE TRIGGER came back "nothing found"
@@ -1697,7 +1813,7 @@ kbagent flow triggers [--project NAME] --flow-id ID [--branch ID]
 # flow schedule (0.66.1+) also activates the config on the Scheduler Service so the cron fires;
 #   activation failure keeps the config written, sets activated=false + warning, exit stays 0.
 #   flow schedule-remove deregisters from the service before deleting each config.
-# Execute a flow with: kbagent job run --project NAME --component-id keboola.flow --config-id ID
+# Execute a flow with: kbagent flow run --project NAME --flow-id ID (or job run --component-id keboola.flow)
 
 kbagent schedule list [--project NAME ... | --all-projects] [--enabled-only] [--branch ID]
 kbagent schedule detail [--project NAME] --schedule-id ID [--branch ID]
@@ -1705,15 +1821,34 @@ kbagent schedule find [--cron-window START-END] [--not-run-since DAYS] [--projec
 
 kbagent notification list [--project NAME ... | --all-projects] [--event NAME] [--component-id ID] [--config-id ID]
 kbagent notification detail [--project NAME] --subscription-id ID
-kbagent notification create [--project ALIAS] --event NAME --channel email|webhook --address ADDR [--component-id ID] [--config-id ID] [--branch ID] [--expires-at TS]
+kbagent notification create [--project ALIAS] --event NAME --channel email|webhook --address ADDR [--component-id ID] [--config-id ID] [--branch ID] [--expires-at TS] [--overtime-percent N] [--filter 'FIELD<OP>VALUE' ...]
 kbagent notification delete [--project ALIAS] --subscription-id ID [--yes]
 kbagent notification replace-recipient [--project ALIAS] --subscription-id ID --address NEW_ADDR [--channel email|webhook] [--yes]
+kbagent notification clone [--project ALIAS] --subscription-id ID [--component-id ID] [--config-id ID] [--branch ID] [--overtime-percent N] [--filter 'FIELD<OP>VALUE' ...] [--address ADDR] [--channel email|webhook] [--expires-at TS | --clear-expires-at] [--dry-run]
+# --filter / clone (#989): --filter (repeatable, OP ==,=,<=,>=,<,>; quote it) adds any filter the
+#   service accepts for the event; VALUE is sent as a string; syntax-only check locally, the service
+#   refuses an unknown field; a dedicated option + --filter on one field, or one field+operator twice,
+#   is INVALID_ARGUMENT (exit 2). REST: `filters: [{field, operator?, value}]`. Row columns read
+#   equality filters only. `clone` (write) creates a NEW subscription from an existing one: event and
+#   project kept, each override replaces every source filter on its field (grouped), the rest copied
+#   verbatim, source branch.id kept (active branch never applied), recipient/expiry inherited
+#   unless overridden; returns filters_replaced/added/kept + warnings; --dry-run reads once and
+#   returns `planned`. Every run creates one more subscription. REST:
+#   POST /notifications/{project}/{subscription_id}/clone (body only, extra fields and any query
+#   parameter 422). Version gate lives in gotchas.md.
 # notification WRITE path (since 0.91.0, #690): the group is no longer read-only.
 #   --address carries the email address (--channel email) OR the webhook URL (--channel webhook) --
 #   channel-discriminated on the wire, same as the read path's single `address` column. An invalid
-#   --channel is a structured INVALID_ARGUMENT, exit 2. `create` WITHOUT --branch writes NO branch.id
-#   filter, unlike the UI which always writes one; an absent filter does not constrain matching, so
-#   such a subscription fires for jobs on EVERY branch.
+#   --channel is a structured INVALID_ARGUMENT, exit 2. `create` WITHOUT --branch and without a
+#   branch.id --filter sends no branch.id filter; the Notification Service then stores the default
+#   branch's id itself (production only, like the UI; verified live).
+#   --overtime-percent N (#989): whole percent 1-10000, only for job-processing-long /
+#   phase-job-processing-long (else INVALID_ARGUMENT, exit 2, before any API call); writes the UI's
+#   "job runs longer than usual" filter {field: durationOvertimePercentage, value: N/100,
+#   operator: ">="}. kbagent refuses 0 (a 0 threshold matches every overtime step the daemon reports, as
+#   no threshold does). REST: `overtime_percent` (StrictInt) in the POST body.
+#   Rows of list/detail/create/replace-recipient carry `overtime_percent` (null unless exactly one
+#   `>=` overtime filter). Version gate lives in gotchas.md.
 #   `replace-recipient` is delete+recreate -- the API has NO update primitive. It creates the NEW
 #   subscription FIRST, then deletes the old one, so a NEW subscription_id is ALWAYS minted (scripts
 #   must not cache the old one; the result carries old_subscription_id + new_subscription_id). A
@@ -1728,8 +1863,9 @@ kbagent notification replace-recipient [--project ALIAS] --subscription-id ID --
 #   flow's configuration JSON, so `flow detail` / `config detail` never showed them. The in-flow
 #   `type: "notification"` TASK is a different mechanism and stays visible there.
 #   Event names are kebab-case (job-failed, job-succeeded, job-succeeded-with-warning,
-#   job-processing-long + phase-job-* variants); --event is NOT validated (the API declares
-#   EventName as an open string). The service ACCEPTS ?event= and then IGNORES it (200 + the
+#   job-processing-long + phase-job-* variants); kbagent does NOT validate --event, the service
+#   checks it against its event registry on create and refuses an unknown one; on list a misspelled
+#   event just matches nothing. The service ACCEPTS ?event= and then IGNORES it (200 + the
 #   full list, verified live), so kbagent sends it AND narrows client-side -- a direct API
 #   caller must do the same or get a superset. Filter fields are dotted paths into the event
 #   payload (job.component.id, job.configuration.id, branch.id, phase.id) -- --component-id /
@@ -1751,12 +1887,20 @@ kbagent context [GROUP]
 #   INVALID_ARGUMENT, exit 2, listing the valid ones. --json adds data.group. Version gate in gotchas.md.
 kbagent init [--from-global] [--project ALIAS ...]
 # `--project ALIAS` (repeatable) copies only the named project(s) from the global config and implies --from-global.
-kbagent doctor
+kbagent doctor [--check skipped-selects ...]
 # `doctor` includes an `mcp_tool_tasks` check: it FAILs on scheduled agent tasks still
 # using the removed `--type mcp_tool` (they are inert tombstones that never run again).
 # `agent list` marks those rows and adds a per-task `deprecation` key in --json. Recreate
 # each as `--type cli_command` using the map in docs/mcp-migration.md.
 # `doctor` has no `--fix` since 0.85.0 -- it only ever installed keboola-mcp-server.
+# `doctor` optional checks: a plain doctor lists each one as a skip entry with optional: true and
+#   `command` (the exact command to run it) and does not run it; `--check NAME` (repeatable; serve:
+#   GET /doctor?check=NAME) runs it. `--check skipped-selects`: lists every Snowflake/BigQuery SQL transformation statement
+#   that starts with SELECT (the runtime never runs it) in the production branch of each
+#   connected project, one config listing per component and project; `ran_before_fix` marks
+#   statements that ran until Snowflake transformation 1.7.1 (a comment or whitespace before
+#   SELECT), e.g. data checks written as SELECT ... 1/0. Rewrite those as
+#   SET ABORT_TRANSFORMATION. Version gate lives in gotchas.md.
 kbagent version [--beta]
 kbagent update [--beta] [--major]
 # Major gate (CLI-40, #791 section 4.3): the updater (startup hook, `update`, `version`) reads

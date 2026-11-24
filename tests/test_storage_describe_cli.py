@@ -388,7 +388,10 @@ class TestStorageDescribeTable:
         result = _invoke_with_storage(store, mock_storage, _DESCRIBE_TABLE_ARGS)
 
         assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
-        assert "Description unchanged: in.c-bucket.orders" in result.output
+        assert (
+            "Success: No change: description of in.c-bucket.orders already matches."
+            in result.output
+        )
         assert "Description set" not in result.output
 
     def test_describe_table_human_updated(self, tmp_path: Path) -> None:
@@ -419,8 +422,76 @@ class TestStorageDescribeTable:
         assert output["data"]["result"] is None
 
 
+def _describe_columns_result(status: str) -> dict:
+    return {
+        "project_alias": "prod",
+        "table_id": "in.c-bucket.orders",
+        "columns": {"order_id": "Unique order identifier"},
+        "migrated": {},
+        "skipped": [],
+        "status": status,
+        "result": None if status == "unchanged" else {"id": 1, "status": "success"},
+        "message": "irrelevant",
+    }
+
+
+_DESCRIBE_COLUMN_ARGS = [
+    "storage",
+    "describe-column",
+    "--project",
+    "prod",
+    "--table-id",
+    "in.c-bucket.orders",
+    "--column",
+    "order_id=Unique order identifier",
+]
+
+
 class TestStorageDescribeColumn:
     """Tests for `kbagent storage describe-column`."""
+
+    def test_describe_column_human_unchanged(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock_storage = MagicMock()
+        mock_storage.describe_columns.return_value = _describe_columns_result("unchanged")
+
+        result = _invoke_with_storage(store, mock_storage, _DESCRIBE_COLUMN_ARGS)
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert (
+            "Success: No change: column descriptions on in.c-bucket.orders already match "
+            "(1 column(s))." in result.output
+        )
+        assert "Column descriptions set" not in result.output
+
+    def test_describe_column_human_updated(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock_storage = MagicMock()
+        mock_storage.describe_columns.return_value = _describe_columns_result("updated")
+
+        result = _invoke_with_storage(store, mock_storage, _DESCRIBE_COLUMN_ARGS)
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        assert "Column descriptions set: in.c-bucket.orders (1 column(s))" in result.output
+        assert "No change" not in result.output
+
+    def test_describe_column_json_unchanged_status(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        store = _setup_config(config_dir, {"prod": {"token": TEST_TOKEN}})
+        mock_storage = MagicMock()
+        mock_storage.describe_columns.return_value = _describe_columns_result("unchanged")
+
+        result = _invoke_with_storage(store, mock_storage, ["--json", *_DESCRIBE_COLUMN_ARGS])
+
+        assert result.exit_code == 0, f"Exit code {result.exit_code}: {result.output}"
+        output = json.loads(result.output)
+        assert output["data"]["status"] == "unchanged"
+        assert output["data"]["result"] is None
 
     def test_describe_column_json(self, tmp_path: Path) -> None:
         """describe-column with NAME=DESC pairs returns structured JSON."""
@@ -805,9 +876,21 @@ class TestStorageDescribeBatch:
             "applied": [
                 {"type": "table", "id": "in.c-s.same", "description": "d", "status": "unchanged"},
                 {"type": "table", "id": "in.c-s.new", "description": "d", "status": "updated"},
+                {
+                    "type": "columns",
+                    "id": "in.c-s.same",
+                    "columns": {"a": "d"},
+                    "status": "unchanged",
+                },
+                {
+                    "type": "columns",
+                    "id": "in.c-s.new",
+                    "columns": {"a": "d", "b": "e"},
+                    "status": "updated",
+                },
             ],
             "errors": [],
-            "applied_count": 2,
+            "applied_count": 4,
             "error_count": 0,
         }
 
@@ -821,6 +904,8 @@ class TestStorageDescribeBatch:
         assert "table in.c-s.same (unchanged)" in result.output
         assert "table in.c-s.new (unchanged)" not in result.output
         assert "table in.c-s.new" in result.output
+        assert "columns in.c-s.same (1 cols, unchanged)" in result.output
+        assert "columns in.c-s.new (2 cols)" in result.output
 
     def test_describe_batch_human_mode_wires_progress_callback(self, tmp_path: Path) -> None:
         """Human mode must pass a progress_callback; JSON mode must not."""

@@ -31,6 +31,7 @@ from ..sync.code_extraction import (
     SQL_TRANSFORMATION_COMPONENTS,
     normalize_blocks_codes_script,
 )
+from ..sync.sql_select_skip import skipped_select_warnings
 from ..sync.sql_split import join_statements, split_statements
 from . import _transformation_ops as tf_ops
 from .base import BaseService
@@ -130,8 +131,10 @@ class TransformationService(BaseService):
             dry_run: When True, return the would-be payload without POSTing.
 
         Returns:
-            Result dict with the shaped configuration payload and -- unless
-            ``dry_run`` -- the created ``config_id`` and ``version``.
+            Result dict with the shaped configuration payload, ``warnings``
+            (a SQL_SELECT_SKIPPED_BY_RUNTIME entry per statement the runtime
+            skips) and -- unless ``dry_run`` -- the created ``config_id`` and
+            ``version``.
 
         Raises:
             ValueError: If the SQL contains no statements.
@@ -163,6 +166,9 @@ class TransformationService(BaseService):
                 "branch_id": branch_id,
                 "configuration": configuration,
                 "dry_run": dry_run,
+                # Statements the runtime skips without running (a SELECT):
+                # reported, never refused.
+                "warnings": skipped_select_warnings(resolved_component_id, configuration),
             }
             if dry_run:
                 return result
@@ -262,7 +268,8 @@ class TransformationService(BaseService):
 
         Returns:
             Result dict with ``operations_applied`` messages, the resulting
-            ``blocks`` view, and -- unless ``dry_run`` -- the new ``version``.
+            ``blocks`` view, ``warnings`` (as in :meth:`create`), and -- unless
+            ``dry_run`` -- the new ``version``.
 
         Raises:
             ValueError: On invalid ops (schema or against current structure).
@@ -311,6 +318,9 @@ class TransformationService(BaseService):
                 "storage_replaced": storage is not None,
                 "blocks": _blocks_view(configuration.get("parameters") or {}),
                 "dry_run": dry_run,
+                "warnings": skipped_select_warnings(
+                    resolved.component_id, configuration, config_id=config_id
+                ),
             }
             if dry_run:
                 return result

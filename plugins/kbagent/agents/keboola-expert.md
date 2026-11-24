@@ -116,15 +116,16 @@ been retired, so its absence is NOT a promise (see §1 Rule 6).
 
 | User intent | First choice | Fallback | NEVER |
 |---|---|---|---|
-| Author / edit a conditional flow (keboola.flow) | `kbagent flow validate --definition-file f.yaml --project P` (fetches the live schema; loop until clean) then `flow new` / `flow update --definition-file` | fetch `flow detail`, merge phases/tasks locally, re-validate, push | integer ids (ids are STRINGS); `dependsOn` (use `next[].goto` + conditions); `--component-id` or `keboola.orchestrator` (both dropped 0.57.0); `flow schema --full` without `--project` |
+| Author / edit a conditional flow (keboola.flow) | `kbagent flow validate --definition-file f.yaml --project P` (fetches the live schema; loop until clean) then `flow new` / `flow update --definition-file` | fetch `flow detail`, merge phases/tasks locally, re-validate, push | integer ids (ids are STRINGS); `dependsOn` (use `next[].goto` + conditions); `--component-id` or `keboola.orchestrator` (both dropped 0.57.0) |
 | Schedule flow | `kbagent flow schedule --project P --cron ... [--timezone]` -- confirm `activated: true` | -- | raw REST to `/storage/configurations/keboola.scheduler` |
 | Deploy configs from git in CI | [gitops-cicd-workflow.md](../skills/kbagent/references/gitops-cicd-workflow.md) | -- | `push --force` without a reviewed dry run |
 | What starts this flow automatically / is this flow scheduled | `kbagent flow triggers --project P --flow-id ID` (0.92.0+) -- cron schedules AND table triggers in one call | `kbagent schedule list --project P` for the cron half only | concluding "this flow has no trigger" from an empty result -- `cross_project_triggers_checked` is `false`, so empty means "no trigger that kbagent CHECKED"; reading `last_run: null` as "disabled" (it means never fired); expecting table triggers on a dev branch (the Storage route is production-only) |
 | Who gets notified when a flow fails | `kbagent notification list --project P [--component-id keboola.flow]` (0.86.0+) -- recipients live in a separate service, NOT the flow config | `flow detail` for in-flow `notification` TASKS | reading "nobody is notified" off a flow config, or off a filtered run (check `project_wide_excluded`); camelCase event names (they are kebab-case) |
-| Add / remove / re-point a notification recipient | `kbagent notification create --project P --event job-failed --channel email\|webhook --address A [--config-id K] [--branch ID]` / `notification delete --subscription-id ID` / `notification replace-recipient --subscription-id ID --address NEW` (0.91.0+) | -- | caching the old id after a replace (it is delete+recreate -- a NEW `subscription_id` is always minted; a failed delete leaves a duplicate as `old_deleted: false`); omitting `--branch` and expecting the UI's behavior (no `--branch` = NO `branch.id` filter = fires on every branch) |
-| Create SQL transformation | `kbagent transformation create --project P --name N (--sql '...' \| --sql-file F) [--created-table T ...]` -- dialect from the project `default_backend`, statements split, output mapping derived from the name | `kbagent config new --component-id keboola.snowflake-transformation --name N --project P --push --no-files` then `config update --set ...` | raw `POST /v2/storage/components/.../configs` |
+| Add / remove / re-point a notification recipient | `kbagent notification create --project P --event job-failed --channel email\|webhook --address A [--config-id K] [--branch ID]` / `notification delete --subscription-id ID` / `notification replace-recipient --subscription-id ID --address NEW` (0.91.0+); copy to a flow: `notification clone --subscription-id ID --config-id K` (1.4.0+); slow-job alert: `--event job-processing-long --overtime-percent 50` (1.4.0+) | -- | caching the old id after a replace (it is delete+recreate -- a NEW `subscription_id` is always minted; a failed delete leaves a duplicate as `old_deleted: false`); no `--overtime-percent` on `*job-processing-long` (alerts each overtime step; 1-10000 %) |
+| Create SQL transformation | `kbagent transformation create --project P --name N (--sql '...' \| --sql-file F) [--created-table T ...]` -- dialect from the project `default_backend`, statements split, output mapping from the name; a leading `SELECT` never runs | `kbagent config new --component-id keboola.snowflake-transformation --name N --project P --push --no-files` then `config update --set ...` | raw `POST /v2/storage/components/.../configs` |
 | Edit SQL transformation blocks/codes | `kbagent transformation show` (FRESH ids) then `kbagent transformation edit --project P --config-id K --change-description T --op '{"op":"set_code",...}'` -- 9 ops, ids `b{i}` / `b{i}.c{j}`, `--storage` REPLACES wholesale | `kbagent config update --project P --configuration-file body.json` (auto-normalizes `script[]`) | `transformation edit` without a fresh `show` (positional ids renumber); raw `PUT` (skips `script[]` normalization) |
 | Run a job (and wait) | `kbagent job run --project P --component-id C --config-id K --wait` | -- | `job run` without `--wait` when the user expects the result |
+| Run some flow tasks | `flow run -p P --flow-id F --task-id T` / `--from-phase-id PH` (1.4.0+), `--dry-run` first | -- | treating a partial run as a test of conditions or notification tasks (it ignores conditions, runs only the selected tasks); reporting success from the flow status (read `failed_task_ids`); re-running after a timeout or polling error (`job detail` of `error.details.job_id` first) |
 | Provision / read an OTLP Data Streams endpoint | `kbagent stream create-source -p P --name N --type otlp [--if-not-exists]` (auto-creates logs/metrics/traces sinks) then `stream detail --name N -p P --reveal` | `stream list`; `--no-sinks` for a bare source | deriving the `stream-in` URL yourself (use `source.otlp.url`); printing the secret unasked |
 | Mint / rotate / revoke a scoped Storage token | `kbagent token create -p P --description DESC [--bucket-write B ...] [--expires-in N]` / `token refresh` / `token delete --token-id ID` -- `create` needs a MASTER token (0.89.0+ pre-flight `MISSING_MASTER_TOKEN`; `canManageTokens` alone = server 500, #599), refresh/list/delete need only `canManageTokens`; secret shown ONCE (persist `id` + `expires` only); `token list` (0.86.0+) is the only source of an existing `--token-id` | same ops on the SDK facade: `Client.create_scoped_token / refresh_token / delete_token` | `--component-access` / `--can-read-all-file-uploads` for an UPLOAD token (uploads need `--bucket-write` on the sink bucket; those flags gate READING others' uploads); claiming `stream create-source` needs a master token |
 | Search items by name across projects | `kbagent search QUERY (--project P \| --all-projects) [--type table\|bucket\|config\|flow\|data-app\|transformation] [--search-type textual\|config-based] [--regex]` -- `--regex` matches WHOLE terms on entity names: `report` does NOT match `monthly_report`, write `.*report.*` | -- | `--regex` with `--search-type config-based` (exit 2) |
@@ -174,7 +175,7 @@ been retired, so its absence is NOT a promise (see §1 Rule 6).
 | Schedule / manage Agent Tasks | `kbagent agent <verb>` -- CRUD, `run [--stream]`, history, `test`/`cron-preview`/`prompt-improve`. Local-only; cron firing needs `kbagent serve`. See [agent-tasks-cli-workflow](../skills/kbagent/references/agent-tasks-cli-workflow.md) | `kbagent http <verb> /agents...` inside scheduled subprocesses | hand-editing `agents.json` |
 | Read a semantic-layer model (models, metrics, datasets, constraints) | `kbagent --json semantic-layer show --project P [--model M] [--type metric\|dataset\|relationship\|constraint\|glossary]`; `model list`; `search-context` / `get-context` for glob/id lookup; `validate [--deep]` before trusting one. Any valid, non-disabled, non-expired Storage token works for reads (0.97.0, PSGO-282 -- the metastore no longer requires a master token for GET/List) | -- | hand-rolled `httpx` loops against `metastore.*.keboola.com` (bypasses retry/backoff and the kbagent error envelope) |
 | ANY semantic-layer write (add / edit / remove / import / promote / build / scope add|remove|set|request-create) | `kbagent semantic-layer export` FIRST (no soft-delete or history: the snapshot is the only restore path), then the write, `--dry-run` where offered. Needs a project-admin token (master or admin-role user token, PSGO-282); a non-admin token gets `MISSING_MASTER_TOKEN`/403 on writes. `Read` [semantic-layer-workflow.md](../skills/kbagent/references/semantic-layer-workflow.md) before starting: per-verb recipes, rename cascade, promote classification | `semantic-layer diff` (`--project-a/-b` or `--file-a/-b`) to confirm what a write would change | raw metastore REST (no rollback, no orphan scan, no modelUUID rewrite); a write with no export taken |
-| Share a semantic-layer object across projects, or make it org-wide | **ASK THE USER which project(s) before EVER passing `--scope organization\|targeted` (on `model create`/`add <kind>`) or running `scope set --scope organization`/`scope request-create` -- never guess or default to widening visibility.** Once the user names the target(s): `--scope targeted --target-project ALIAS\|ID` grants specific projects; `scope add\|remove --project P --type T --context-id ID --target-project ALIAS\|ID` adjusts an existing item's grants from the owning project, `scope set --target-project ...` / `--clear` replaces the list; org-wide needs `scope request-create` then an org-admin's `scope set --scope organization --yes` -- **irreversible, destructive-class**. `scope get --type T --context-id ID` first. See [metastore-scope-workflow.md](../skills/kbagent/references/metastore-scope-workflow.md) | `scope request-list --type T` to find items an org-admin should act on | passing `--scope organization\|targeted` or running `scope set --scope organization` without the user having named the target project(s) first; assuming `--scope organization` succeeds on a non-admin token (it 403s -- creating directly at organization scope needs the SAME organization-admin role as elevating); forgetting that `import`/`promote`/`build --model` into a shared model also share every new item (they take the model's scope unless `import`/`promote` get `--scope`); trying to elevate an item created before 0.97.0 (schema version 1.0.0: recreate it via export, delete, create, import) |
+| Share a semantic-layer object across projects, or make it org-wide | **ASK THE USER which project(s) before EVER passing `--scope organization\|targeted` (on `model create`/`add <kind>`) or running `scope set --scope organization`/`scope request-create` -- never guess or widen visibility by default.** Once the user names the target(s): `--scope targeted --target-project ALIAS\|ID` grants specific projects; `scope add\|remove --project P --type T --context-id ID --target-project ALIAS\|ID` adjusts an existing item's grants from the owning project, `scope set --target-project ...` / `--clear` replaces the list; org-wide needs `scope request-create` then an org-admin's `scope set --scope organization --yes` -- **irreversible, destructive-class**. `scope get --type T --context-id ID` first. See [metastore-scope-workflow.md](../skills/kbagent/references/metastore-scope-workflow.md) | `scope request-list --type T` to find items an org-admin should act on | passing `--scope organization\|targeted` or running `scope set --scope organization` before the user named the target project(s); `import`/`promote`/`build --model` into a shared model share new items too; the 403, inherited-scope and pre-0.97.0 traps: metastore-scope-workflow.md |
 | Row/column-level (RLS/CLS) policy | `kbagent {rls,cls} create\|update\|delete --project P --table-id T` (`--dry-run` first; `--scope organization` only if asked); rules pick by `subjects` or `groups`, never email; QS enforces on a `workspace create --governed` workspace (`rls bind` allowlists). [rls-workflow.md](../skills/kbagent/references/rls-workflow.md) | `rls schema` | a raw predicate as `condition`; `rls setup` |
 | User asks to "log in" / authenticate via browser / register a session's projects | ATTENDED session + a background shell: run `kbagent auth login --device-code --stack URL --register-projects` in a **BACKGROUND** shell (capture stdout+stderr, human mode -- `--json` puts the panel on stderr), relay the verification URL + user code to the user, then poll `kbagent --json auth status` (exit 0 = signed in, exit 3 = not yet). The human's part is approving in the browser, not typing the command. No background shell -> hand the plain `auth login --stack URL --register-projects` to the user's terminal. To register projects from an EXISTING session, `kbagent auth register-projects --all` or `--project-id ID` is non-interactive and agent-safe | -- | running `auth login` in a FOREGROUND tool shell (~120 s timeout kills it mid-flight); running it unattended (nobody can approve); re-running it blind without checking `auth status` first (orphans a session); the flagless `register-projects` picker unattended; reading the token out of `auth.json`; using a numeric project id as an alias |
 | User has NO Keboola account / project at all and asks to get started | `kbagent project create --url URL [--alias ALIAS] [--name NAME] [--backend snowflake\|bigquery]` (0.95.0+) -- provisions a real project, stores its session and registers the alias in one call, agent-runnable. **Then relay the result's `confirm_url` to the human verbatim and say the project is owned by nobody until they open it**; after they confirm, the agent session is revoked by design -> `kbagent auth login --stack URL` | the user creating the project in the Keboola UI, then `auth login` / `project add --token-stdin` | calling it on a stack where a session already exists (exit 5 -- one session per stack); reporting success without the confirm link (an unclaimed project is a billable orphan); retrying it after a 5xx/429/503 without being asked (each success creates a new organization + project + credit grant) |
@@ -251,20 +252,22 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   --sort-order`. `storage tables --include-usage` -- storage input/output
   mappings ONLY, never SQL text. `search --scope PATH` -- config-based only.
   `sharing link --stage in|out` -- default stays `in`, NOT derived from the
-  source bucket (MCP derives it). All five are on `kbagent serve` too. gotchas.md.
+  source bucket. gotchas.md.
 
 **A write that failed with a 5xx**
 - `POST`/`PATCH` is NOT retried on 5xx any more (0.86.0+); `retryable: false`
-  there is deliberate -- never wrap it in your own retry loop. The work may have
-  landed: check with `token list` / `job list` before repeating. The message
-  carries the `exceptionId` -- quote it when escalating. gotchas.md.
+  is deliberate: no retry loop. The work may have
+  landed: check `token list`/`job list` first. Quote the
+  message's `exceptionId` when escalating. gotchas.md.
 
 **A 401 is not always `INVALID_TOKEN` (0.92.0+)**
-- Exit 3 covers `INVALID_TOKEN`, `AUTH_REJECTED` (the 401 body blames
-  something other than the credential) and `MISSING_MASTER_TOKEN` (a
+- Exit 3 covers `INVALID_TOKEN`, `AUTH_REJECTED` (401 body blames
+  something else) and `MISSING_MASTER_TOKEN` (a
   semantic-layer write on a non-admin token). Accept all three before
-  concluding the credential is bad. Quote the `[exceptionId: ...]` when
-  escalating. gotchas.md.
+  concluding the credential is bad. gotchas.md.
+- `INVALID_TOKEN` in local `.kbagent/` after a global rotation (1.4.0+):
+  `project refresh --dry-run`, ask, `project refresh` (Manage token
+  only to mint). No config.json edits or `--force`. safe-write-workflow.md.
 
 **Finding an existing Storage token**
 - `kbagent token list -p P` (0.86.0+) -- the only source of the `--token-id`
@@ -279,7 +282,7 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   is invalid. `flow new`/`flow update` validate against the **live** schema
   fetched from the stack and reject bad bodies with `INVALID_FLOW_DEFINITION`;
   a failed schema fetch does NOT block the write (structural checks skipped,
-  `structural schema validation skipped` warning). `flow update --definition-file` is a
+  with a warning). `flow update --definition-file` is a
   **full-replace** of phases+tasks -- fetch `flow detail` first, merge locally,
   `flow validate --definition-file merged.yaml --project P` until clean, then push.
 - **"No schedules found" is not "no trigger" (0.92.0+)**: `schedule list` /
@@ -318,11 +321,10 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
 - **`kbagent storage rename-table` does not exist** (nor `flow migrate`): the
   Storage API has no table rename. Create-new + rewrite downstream configs;
   never propose a rename step.
-- **`column_metadata: {}` in synced files** is not authoritative -- a `sync
-  pull` may not have fetched metadata. Re-fetch via `storage table-detail`
-  before any type decision; never trust a synced file for write-path metadata.
-- **Drifted sync tree**: reconcile with `sync pull --theirs` (remote wins:
-  overwrites local edits, restores deleted files, resolves conflicts); NEVER
+- **`column_metadata: {}` in synced files** is not authoritative (pull may
+  not have fetched it): re-fetch via `storage table-detail` before any type
+  decision.
+- **Drifted sync tree**: reconcile with `sync pull --theirs` (remote wins everywhere); NEVER
   hand-edit `.keboola/manifest.json`. Plain pull re-materializes deleted dirs;
   `is_disabled: true` = disabled (absent = enabled); `never_fetched` on
   diff/push = `sync pull` first; non-zero `summary.orphaned` (0.89.0+, #649) =
@@ -340,10 +342,12 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   diff` still shows the edit as local; a promoted config gets its own dev
   entry; flow/schedule/variables/shared-code refs map to dev ids. gotchas.md.
 - **Sync rows/deletes/companions** (1.0.0, #931/#933): `push --force` never
-  deletes a remotely changed (or baseline-less) config/row -- read
-  `refused_deletions[]`; UI-added rows are in `remote_only_rows[]`; ignoring a
-  component keeps local work; `_description.md`/`pyproject.toml` are a tracked
-  set, a pyproject with no dependencies list never clears packages. gotchas.md.
+  deletes a remotely changed or baseline-less config/row (`refused_deletions[]`);
+  UI-added rows: `remote_only_rows[]`; ignoring a component keeps local work.
+  1.4.0+ (#827): updates are conditional -- `SYNC_CONFLICT` = edited in Keboola
+  after push read it, its rows held: pull, review, push; never retry blindly.
+  Don't edit the tree during push. Never use an older kbagent on a manifest
+  with `pendingRemovals`. gotchas.md.
 - **Ignored components** (0.91.0, #689): `keboola.sandboxes` +
   `keboola.mcp-server-tool` (+ manifest `ignoredComponents`) never sync; on
   <= 0.90.1 delete-dir-then-push still deletes such a config in production.
@@ -482,31 +486,28 @@ its absence is NOT a promise the entry is version-independent (see §1 Rule 6).
   `projects_failed` / `projects_refresh_failed` / `failed` / `summary.failed`
   and retry only the failed items, never the whole command blind (`--dry-run`
   exits 1 the same way). The 18 fan-out reads
-  (`billing credits`, `job list`, ...) exit 1 too (since 1.0.0, 0 before).
-  On 0.97.0 and older these writes exit 0 even when items failed: check the
-  same keys.
+  (`billing credits`, `job list`, ...) exit 1 too (1.0.0+).
+  On <=0.97.0 these writes exit 0 on item failure: check the same keys.
 - `project refresh` / `org setup --refresh` SKIP session projects (`--force`
-  does not override). A refresh TIMEOUT is exit 4 (network) -- re-run, do not
-  re-login.
+  too). A session-refresh TIMEOUT is exit 4: re-run, do not re-login.
 
 **Semantic-layer** -- full prose in
 [`gotchas.md`](../skills/kbagent/references/gotchas.md) § Semantic-layer:
 
-- constraint `rule` is a STRING (not `{bounds: {min, max}}`); `severity` is
-  3-level (`error|warning|info`) while the 4-band health lives in the name suffix
-  (`_critical/_warning/_healthy/_review`).
-- `edit metric --new-name` cascades into constraints' `metrics[]` and changes
-  CODE_METRIC -- downstream joins break silently, so surface it.
-- `remove metric` orphans referencing constraints (drop/rewrite first; the scan
-  warns even with `--yes`, non-TTY exits 2); `build` is a heuristic scaffold
-  (`fallback_used: "heuristic"`), not the full AI wizard (that is the `sl-build`
-  skill).
+- constraint `rule` is a STRING (not `{bounds:...}`); `severity` is
+  `error|warning|info`, the 4-band health is the name suffix (`_critical`...).
+- `edit` PATCHes only the keys you pass; all equal: no write, `status` unchanged (1.4.0+); two edits of the SAME key:
+  last wins. A 5xx/read timeout isn't retried, may have applied: `show` before
+  repeating. `edit metric --new-name` cascades into constraints' `metrics[]` and
+  changes CODE_METRIC (downstream joins break: surface it); `validate`
+  after. `import --overwrite`/`promote` PUT whole items: never during edits.
+- `remove metric` orphans referencing constraints (drop/rewrite first; warns
+  even with `--yes`, non-TTY exits 2); `build` is a heuristic scaffold, not the
+  `sl-build` AI wizard.
 - dataset `fqn` = the table's Storage location (`storage table-detail` ->
-  `sql_path`), since 0.95.0: `add dataset` fails on a table that does not exist
-  unless `--fqn` is given. Older kbagent wrote a `"KEBOOLA"` database that
-  resolves nowhere -- `validate --deep` flags those as `FQN_MISMATCH`; never
-  hand-build an fqn from the tableId (a linked bucket lives in the SOURCE
-  project's database and schema).
+  `sql_path`), since 0.95.0: `add dataset` fails on a missing table unless
+  `--fqn` is given. Old `"KEBOOLA"` fqns: `validate --deep` -> `FQN_MISMATCH`;
+  never hand-build an fqn (a linked bucket lives in the SOURCE project).
 
 **`permissions set --allow/--deny` validates patterns (since 0.91.0)**
 - A typo'd or fabricated pattern (`tool.admin`, `stroage.*`) fails fast with
@@ -642,11 +643,6 @@ Repeated promotion between live projects: the kbagent-promotion-pipeline skill.
 ---
 
 ## 5. ERROR RECOVERY DECISION TREE
-
-- `No such command 'tool'` / `agent action type 'mcp_tool' was REMOVED`:
-  → The MCP passthrough was removed in v0.85.0. Look up the tool name in
-    `docs/mcp-migration.md` and run the native command; for an agent task,
-    recreate it as `--type cli_command`.
 
 - `flow new`/`flow update` failed with `INVALID_FLOW_DEFINITION`:
   → The body failed schema/semantic validation. Run

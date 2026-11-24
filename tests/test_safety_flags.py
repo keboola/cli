@@ -622,9 +622,9 @@ def test_preview_then_confirm_refuses_without_terminal(
 ) -> None:
     service = MagicMock()
     getattr(service, method).return_value = preview
-    with patch(
-        f"keboola_agent_cli.commands.{module}.resolve_manage_token", return_value="manage-token"
-    ):
+    # `project refresh` resolves the Manage token through manage_token_if_available (#955).
+    resolver = "manage_token_if_available" if module == "project" else "resolve_manage_token"
+    with patch(f"keboola_agent_cli.commands.{module}.{resolver}", return_value="manage-token"):
         result = _invoke(tmp_path, service_attr, service, args, user_input="y\n")
     assert result.exit_code == 2, result.output
     assert "CONFIRMATION_REQUIRED" in result.stderr

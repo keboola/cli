@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -29,7 +30,7 @@ from ..sync.branch_scope import (
 from ..sync.code_extraction import PYPROJECT_FILENAME
 from ..sync.config_format import BASE_CONFIG_HASH_KEY
 from ..sync.manifest import ManifestConfigRow, ManifestConfiguration
-from ..sync.pyproject_identity import refresh_pyproject_identity
+from ..sync.pyproject_identity import PyprojectRefresh, refresh_pyproject
 from ._encryption import apply_encrypted_to_local
 from ._sync_baseline import apply_stamp, config_baseline
 from ._sync_companions import canonical_description, record_companions
@@ -525,6 +526,22 @@ def propagate_kbc_metadata(
     return None
 
 
+@dataclass(frozen=True)
+class WrittenFiles:
+    """The bytes :func:`writeback_after_push` wrote, as hashes (#827).
+
+    Attributes:
+        file_hash: SHA-256 of the ``_config.yml`` text it wrote.
+        pyproject: What the ``pyproject.toml`` refresh did; ``None`` for a row.
+
+    A push stamps these, never a fresh read of the files: an edit saved right
+    after the write then differs from the stamp and ``sync diff`` reports it.
+    """
+
+    file_hash: str
+    pyproject: PyprojectRefresh | None = None
+
+
 def writeback_after_push(
     service: SyncService,
     local_data: dict[str, Any],
@@ -536,7 +553,8 @@ def writeback_after_push(
     row_id: str = "",
     component_id: str = "",
     warnings: list[dict[str, Any]] | None = None,
-) -> None:
+    expected_pyproject_hash: str | None = None,
+) -> WrittenFiles:
     """Update local ``_config.yml`` after a successful push.
 
     Writes back the API-assigned ``_keboola.config_id`` (on first create) and
@@ -554,7 +572,10 @@ def writeback_after_push(
     would write (only those fields; *component_id* says whether it owns one),
     before the caller hashes the companions -- also no id on the promote path.
     A ``pyproject.toml`` that cannot be refreshed safely is left as it is and
-    reported in *warnings*: the remote write already happened.
+    reported in *warnings*: the remote write already happened. With
+    *expected_pyproject_hash* (the hash of the file push read) a
+    ``pyproject.toml`` edited since is not touched (``pyproject.edited``); the
+    caller reports it.
     """
     if not is_row:
         local_data = canonical_description(local_data, config_dir)
@@ -570,14 +591,20 @@ def writeback_after_push(
     if pushed_params and local_params:
         apply_encrypted_to_local(local_params, pushed_params)
 
-    service._write_config_file(config_dir, local_data)
+    file_hash = service._write_config_file(config_dir, local_data)
+    pyproject: PyprojectRefresh | None = None
     if not is_row and component_id:
-        refreshed = refresh_pyproject_identity(
-            component_id, config_dir, name=str(local_data.get("name") or ""), config_id=config_id
+        pyproject = refresh_pyproject(
+            component_id,
+            config_dir,
+            name=str(local_data.get("name") or ""),
+            config_id=config_id,
+            expected_hash=expected_pyproject_hash,
         )
-        if not refreshed and warnings is not None:
+        if not pyproject.refreshed and not pyproject.edited and warnings is not None:
             warnings.append(_pyproject_warning(component_id, config_dir))
     logger.debug("Updated local config at %s after push", config_dir)
+    return WrittenFiles(file_hash=file_hash, pyproject=pyproject)
 
 
 def _pyproject_warning(component_id: str, config_dir: Path) -> dict[str, str]:

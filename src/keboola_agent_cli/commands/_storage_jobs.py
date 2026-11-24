@@ -22,6 +22,7 @@ from rich.markup import escape
 
 from ..constants import IMPORT_JOB_MAX_WAIT
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..models import ImportMethod
 from ..output import OutputFormatter
 from ._helpers import emit_api_error, get_formatter, get_service, map_error_to_exit_code
 from ._project_ref import PROJECT_HELP
@@ -40,6 +41,20 @@ ImportWaitOption = Annotated[
     ),
 ]
 
+ImportMethodOption = Annotated[
+    ImportMethod,
+    typer.Option(
+        "--import-method",
+        help=(
+            "How a Snowflake import writes the table. auto (default): the platform default, "
+            "nothing is sent. single_statement: one MERGE (incremental) or INSERT OVERWRITE "
+            "(full). multi_statement: a deduplication table and separate statements. "
+            "Snowflake only: another value than auto on another backend is refused "
+            "(INVALID_ARGUMENT, exit 2) and nothing is imported."
+        ),
+    ),
+]
+
 ImportTimeoutOption = Annotated[
     float | None,
     typer.Option(
@@ -54,6 +69,9 @@ ImportTimeoutOption = Annotated[
 
 def print_import_outcome(formatter: OutputFormatter, project: str, result: dict[str, Any]) -> None:
     """Human-mode lines for an import result: rows, or how to follow the job."""
+    import_method = result.get("import_method")
+    if import_method and import_method != ImportMethod.auto:
+        formatter.console.print(f"  Import method: {import_method}")
     if result.get("imported_rows") is not None:
         formatter.console.print(f"  Rows imported: {result['imported_rows']}")
     elif result.get("job_status") not in (None, "success"):

@@ -19,13 +19,16 @@ diff/push.
 
 from __future__ import annotations
 
+import os
 import shutil
+import stat
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from ..constants import CONFIG_FILENAME
+from ..constants import CONFIG_FILENAME, KEBOOLA_DIR_NAME
+from .dir_lock import LOCK_DIR
 
 # Duplicated here (not imported from sync_service) to avoid a circular import --
 # clone.py is imported *by* sync_service.
@@ -53,16 +56,62 @@ def _write_yaml(path: Path, data: dict[str, Any]) -> None:
     )
 
 
+def is_fresh_target(target_dir: Path) -> bool:
+    """True iff *target_dir* does not exist, is empty, or holds nothing but its sync lock (L5).
+
+    Clone takes the target's directory lock before it copies, and the lock
+    lives in ``.keboola/lock/`` -- so a target that holds only that folder is
+    still a fresh one, like an empty one (#827 round 2).
+    """
+    if not target_dir.is_dir():
+        return not target_dir.exists()
+    if not any(target_dir.iterdir()):
+        return True
+    keboola = target_dir / KEBOOLA_DIR_NAME
+    if not keboola.is_dir():
+        return False
+    return [p.name for p in target_dir.iterdir()] == [KEBOOLA_DIR_NAME] and [
+        p.name for p in keboola.iterdir()
+    ] == [LOCK_DIR]
+
+
 def copy_reference_tree(source_dir: Path, target_dir: Path) -> None:
     """Copy a reference project tree to a fresh target dir (incl. code files).
 
+    The source's lock folder is never copied, and the target's own (its
+    clone holds it) is never replaced.
+
     Raises:
-        FileExistsError: if ``target_dir`` already exists (the caller decides
-            whether an existing target means "already cloned, just push").
+        FileExistsError: if ``target_dir`` holds anything but its lock (the
+            caller decides whether an existing target means "already cloned,
+            just push").
     """
-    if target_dir.exists():
+    if not is_fresh_target(target_dir):
         raise FileExistsError(f"Target directory already exists: {target_dir}")
-    shutil.copytree(source_dir, target_dir)
+    source_keboola = (source_dir / KEBOOLA_DIR_NAME).resolve()
+
+    def skip_lock(directory: str, names: list[str]) -> list[str]:
+        return [LOCK_DIR] if Path(directory).resolve() == source_keboola else []
+
+    shutil.copytree(source_dir, target_dir, ignore=skip_lock, dirs_exist_ok=True)
+    # copytree copies the source's modes too: a read-only reference (a shared
+    # copy this user cannot write) would give a clone that the push after the
+    # copy cannot write. The clone is this user's own tree, so it gets the
+    # owner's write bit back (on Windows this clears the read-only attribute).
+    _make_owner_writable(target_dir)
+
+
+def _make_owner_writable(root: Path) -> None:
+    """Add the owner write bit to *root* and everything under it."""
+    paths = [root]
+    for folder, dirs, files in os.walk(root):
+        paths.extend(Path(folder, name) for name in (*dirs, *files))
+    for path in paths:
+        if path.is_symlink():
+            continue
+        mode = path.stat().st_mode
+        if not mode & stat.S_IWUSR:
+            path.chmod(stat.S_IMODE(mode) | stat.S_IWUSR)
 
 
 def repoint_manifest_project(

@@ -496,7 +496,7 @@ Ask the Keboola documentation natural-language questions
     "doctor": """\
 ### doctor
 
-  kbagent doctor
+  kbagent doctor [--check skipped-selects ...]
     Run health checks on CLI configuration and project connectivity.
 """,
     "encrypt": """\
@@ -560,6 +560,11 @@ Manage conditional flows (keboola.flow)
   kbagent flow new [--project PROJECT] --name NAME [--description DESCRIPTION]
       [--definition DEFINITION] [--definition-file PATH] [--branch N]
     Create a new conditional-flow (keboola.flow) configuration.
+
+  kbagent flow run [--project PROJECT] --flow-id ID [--task-id ID ...]
+      [--from-phase-id ID] [--variable-values-id ID] [--no-variables]
+      [--branch N] [--wait] [--timeout N] [--dry-run]
+    Run a conditional flow, or only some of its tasks.
 
   kbagent flow schedule [--project PROJECT] --flow-id ID --cron CRON
       [--timezone TIMEZONE] [--enabled/--disabled] [--name NAME] [--branch N]
@@ -743,12 +748,19 @@ Merge requests: merge a development branch into production with review
 ### notification
 
 Manage notification subscriptions across projects (Flow Notifications tab).
-'list'/'detail' are read-only; 'create'/'replace-recipient' are gated as
-write, 'delete' as destructive.
+'list'/'detail' are read-only; 'create'/'replace-recipient'/'clone' are gated
+as write, 'delete' as destructive.
+
+  kbagent notification clone [--project PROJECT] --subscription-id ID
+      [--component-id ID] [--config-id ID] [--branch N] [--overtime-percent N]
+      [--filter FILTER ...] [--address ADDRESS] [--channel CHANNEL]
+      [--expires-at AT] [--clear-expires-at] [--dry-run]
+    Create a new subscription from an existing one, with overrides.
 
   kbagent notification create [--project PROJECT] --event EVENT
       --channel CHANNEL --address ADDRESS [--component-id ID] [--config-id ID]
-      [--branch N] [--expires-at AT]
+      [--branch N] [--expires-at AT] [--overtime-percent N]
+      [--filter FILTER ...]
     Create a notification subscription.
 
   kbagent notification delete [--project PROJECT] --subscription-id ID [--yes]
@@ -1294,7 +1306,8 @@ Browse and manage storage buckets, tables, and files
 
   kbagent storage load-file [--project PROJECT] --file-id N --table-id ID
       [--incremental] [--delimiter DELIMITER] [--enclosure ENCLOSURE]
-      [--branch N] [--wait/--no-wait] [--timeout N]
+      [--branch N] [--import-method auto|single_statement|multi_statement]
+      [--wait/--no-wait] [--timeout N]
     Load a Storage File into a table.
 
   kbagent storage snapshot-create [--project PROJECT] --table-id ID
@@ -1340,8 +1353,9 @@ Browse and manage storage buckets, tables, and files
 
   kbagent storage upload-table [--project PROJECT] --table-id ID --file PATH
       [--incremental] [--delimiter DELIMITER] [--enclosure ENCLOSURE]
-      [--auto-create/--no-auto-create] [--branch N] [--wait/--no-wait]
-      [--timeout N] [--progress]
+      [--auto-create/--no-auto-create] [--branch N]
+      [--import-method auto|single_statement|multi_statement]
+      [--wait/--no-wait] [--timeout N] [--progress]
     Upload a CSV (or gzipped CSV) file into a storage table.
 """,
     "stream": """\

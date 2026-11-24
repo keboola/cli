@@ -24,7 +24,7 @@ import yaml
 from ..constants import CONFIG_FILENAME
 from ..errors import ErrorCode
 from ..sync.config_format import unknown_local_keys
-from ..sync.manifest import ManifestConfiguration
+from ..sync.manifest import ManifestConfiguration, PendingPaths, under_pending
 
 LOCAL_FILE_INVALID_CODE = ErrorCode.SYNC_LOCAL_FILE_INVALID.value
 # ``change_type`` of the ``errors[]`` entry, so push renders it like any other.
@@ -148,6 +148,7 @@ def check_local_files(
     branch_path: str,
     configs: list[ManifestConfiguration],
     ignored: Collection[str] = (),
+    pending: PendingPaths | None = None,
 ) -> LocalFileCheck:
     """Find every unusable ``_config.yml`` of one branch tree (configs and rows).
 
@@ -157,6 +158,8 @@ def check_local_files(
             reported ``path``.
         configs: The manifest entries of that tree, for each file's identity.
         ignored: Ignored components: diff and push never read their files.
+        pending: Directories a pull has not finished deleting (#827, D11):
+            absent, so never read either.
     """
     check = LocalFileCheck()
     branch_dir = project_root / branch_path
@@ -167,6 +170,8 @@ def check_local_files(
         rel_parts = config_file.parent.relative_to(branch_dir).parts
         if not rel_parts:
             continue  # the branch-level _config.yml
+        if pending is not None and under_pending("/".join(rel_parts), pending):
+            continue
         owner = _owner(branch_dir, rel_parts, set(tracked))
         identity = _identity(branch_dir, owner.path, tracked)
         if _is_ignored(owner.path, identity, ignored):
