@@ -308,13 +308,18 @@ Owner who pauses the writers:
 
 ## 2. Choose granularity
 
-Use the `days` and `months` values of section 1.
+Use the `days`, `months` and `nulls` values of section 1. Rows with NULL in
+`COL` go to one more partition (`__NULL__`), and it counts toward the limit.
+So add 1 to both counts when `nulls` is above 0:
 
-| Distinct values | Granularity | Flag |
+- `day_partitions` = `days`, plus 1 when `nulls` is above 0.
+- `month_partitions` = `months`, plus 1 when `nulls` is above 0.
+
+| Partitions | Granularity | Flag |
 |---|---|---|
-| At most 4,000 days | DAY | `--time-partitioning-type DAY` |
-| More than 4,000 days | MONTH | `--time-partitioning-type MONTH` |
-| More than 4,000 months | Stop. Ask the owner. | |
+| `day_partitions` at most 4,000 | DAY | `--time-partitioning-type DAY` |
+| `day_partitions` over 4,000, `month_partitions` at most 4,000 | MONTH | `--time-partitioning-type MONTH` |
+| `month_partitions` over 4,000 | Stop. Ask the owner. | |
 
 On that stop, delete the helper workspace (the `workspace delete` command of
 section 1). No other object exists yet.
