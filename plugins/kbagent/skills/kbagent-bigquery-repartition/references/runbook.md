@@ -652,9 +652,10 @@ types of the definition in 4b, written as BigQuery SQL types: `INTEGER` is
 creates every column nullable; the output mapping then tries to change the
 NOT NULL columns of the table from 4b, and the job fails ("column's mode
 changed: REQUIRED -> NULLABLE"). Write the types without a length and
-without a default. Whether the load keeps the length and the default that 4b
-set was not verified: the Length and Column defaults checks of section 5
-catch a loss.
+without a default. The load keeps the length and the default that 4b set
+(verified on a `STRING(100)` column and a default `0`, in Storage and in
+BigQuery). The Length and Column defaults checks of section 5 still compare
+them.
 
 Without a type change the SELECT lists every column unchanged, `COL`
 included, and the column list keeps the type of `COL`:
@@ -905,12 +906,14 @@ section 3.
 
 ```bash
 kbagent --json storage swap-tables --project ALIAS --table-id B.T --target-table-id B.T_repart --branch 0 --dry-run
-kbagent --json storage swap-tables --project ALIAS --table-id B.T --target-table-id B.T_repart --branch 0 --yes --timeout 3600
+kbagent --json storage swap-tables --project ALIAS --table-id B.T --target-table-id B.T_repart --branch 0 --yes --timeout 3600 | jq 'if .data then (.data.response | {id, status, operationName}) else {error} end'
 kbagent --json storage table-detail --project ALIAS --table-id B.T | jq 'del(.data.definition.partitions)'
 ```
 
 The dry run only echoes the pair of tables. It validates nothing: Storage
-checks the pair when the swap runs.
+checks the pair when the swap runs. The filter on the swap prints the
+Storage job (`id`, `status`, `operationName`), which the output holds under
+`data.response`, or the error. Record the job ID for section 10.
 
 After the swap `B.T` holds the new layout and `B.T_repart` holds the old
 table. The swap also moves `last_import_date` of both tables to the time of
@@ -1000,7 +1003,7 @@ While `B.T_repart` exists, the rollback is a second swap. Before it:
 
 ```bash
 kbagent --json storage swap-tables --project ALIAS --table-id B.T --target-table-id B.T_repart --branch 0 --dry-run
-kbagent --json storage swap-tables --project ALIAS --table-id B.T --target-table-id B.T_repart --branch 0 --yes --timeout 3600
+kbagent --json storage swap-tables --project ALIAS --table-id B.T --target-table-id B.T_repart --branch 0 --yes --timeout 3600 | jq 'if .data then (.data.response | {id, status, operationName}) else {error} end'
 kbagent --json storage table-detail --project ALIAS --table-id B.T | jq 'del(.data.definition.partitions)'
 ```
 
