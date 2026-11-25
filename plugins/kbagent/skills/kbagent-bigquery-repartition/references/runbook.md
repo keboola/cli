@@ -295,13 +295,20 @@ kbagent --json storage tables --project ALIAS
   point at `B.T`. Record them. Aliases in other projects exist only through
   linked buckets, which the sharing edges show.
 
-  `swap-tables` does not move aliases. An alias keeps its physical table, so
-  after the swap it reads the old, unpartitioned table, which is then named
-  `B.T_repart` and is dropped on day 7. kbagent has no command that creates
-  an alias. So for every alias of `B.T` the owner records its definition
-  (bucket, name, columns, filter, column sync) and agrees to delete it and
-  create it again on `B.T` right after the swap (section 6, step 4). Without
-  that agreement the table is refused.
+  An alias of `B.T` follows the table ID through the swap and through a
+  rollback: after the swap it reads the new `B.T`. Nothing is deleted and
+  nothing is created again. In BigQuery the alias is a view that names
+  `DATASET.T`, and Storage rewrites it during the swap. So the readers of an
+  alias see the new layout and, with a type change, the new type of `COL`.
+  Tell the owner, and count the readers of every alias as readers of `B.T`
+  in sections 6 and 7.
+
+  This was observed on one alias: in a project with the feature
+  `bigquery-persisted-alias-views`, without a filter, with synchronized
+  columns, in the same project. An alias with a filter, an alias with
+  columns that are not synchronized, an alias in another project and a
+  project without that feature were not tested: record for each alias which
+  of these hold, and check each alias after the swap (section 6, step 4).
 
 ### Refuse rules
 
@@ -319,8 +326,6 @@ command above):
   `bigquery-policy-tags` feature.
 - A column carries a policy tag in BigQuery and the backend capability
   `policyTagsEnabled` is false or could not be read (section 1).
-- At least one alias points at the table, and the owner has not recorded its
-  definition or has not agreed to create it again after the swap.
 - The owner cannot say which aliases point at the table.
 - The BigQuery-native objects are unknown, because nobody could read them.
 - The recorded statement of a search index is incomplete.
@@ -401,8 +406,8 @@ sql_path:
 Sharing edges with the bucket as source:
 Writers (used_by, flows, schedules):
 Readers:
-Aliases that point at the table (ID, columns, filter, column sync):
-Owner creates the aliases again after the swap (yes / no aliases):
+Aliases that point at the table (ID, project, filter, column sync):
+Project feature bigquery-persisted-alias-views (yes / no):
 Distinct days / months / years, out_of_range, min, max, null_count of the partition column:
 Table IAM policy JSON:
 Row access policies (must be none):
@@ -903,18 +908,18 @@ the swap. Then, in this order:
    statement fails, retry it. When it fails again, report the missing index to
    the owner and leave the table swapped: the first swap already dropped the
    indexes on both tables, so a second swap restores nothing.
-4. **Aliases.** The swap did not move the aliases recorded in section 1:
-   each of them still reads the old physical table, now `B.T_repart`. Before
-   the writers resume, the owner deletes each alias and creates it again on
-   `B.T` with the recorded definition. kbagent cannot do either step. Then
-   read every alias with `storage table-detail` and compare its columns and
-   `rows_count` with `B.T` and with `B.T_repart`. On path A both tables have
-   the same columns and row count at this point, so this comparison cannot
-   show which table an alias reads: the proof is the owner's confirmation
-   for each alias. Repeat the comparison after the first load in section 7:
-   the alias then equals `B.T` and differs from `B.T_repart`. An alias that
-   follows `B.T_repart` was not created again. Stop the day-7 drop until the
-   owner has done it.
+4. **Aliases.** Every alias recorded in section 1 now reads the new `B.T`.
+   Check each one before the writers resume. Read it with `storage
+   table-detail`: it answers without an error, and its columns and
+   `rows_count` equal those of `B.T`. The operator reads its view with
+   `bq show --format=prettyjson` (dataset of the alias bucket, name of the
+   alias): `view.query` names `DATASET.T`. On path A both tables have the
+   same columns and row count at this point, so repeat the comparison after
+   the first load in section 7: the alias then equals `B.T` and differs from
+   `B.T_repart`. Storage only logs a failed refresh of an alias view. When
+   an alias answers with an error, or differs from `B.T`, hand it to the
+   Connection maintainers (Storage) and stop the day-7 drop until it is
+   repaired.
 5. **Shared bucket.** Read `sharing edges` again: the edges with the bucket
    as source are the same as recorded.
 
@@ -972,9 +977,9 @@ kbagent --json storage table-detail --project ALIAS --table-id B.T | jq 'del(.da
 After a rollback the original physical table is back at `B.T`, with its IAM
 bindings. The operator reads the bindings and the policy tags once more on
 `B.T` (the `get-iam-policy` and policy tag commands of section 1) and stops
-on a difference from the values recorded in section 1. The aliases that the owner created again after the first swap now
-read `B.T_repart`: the owner deletes them and creates them again on `B.T`
-(section 6, step 4). A person creates the search indexes again
+on a difference from the values recorded in section 1. The aliases follow
+`B.T` through the rollback too and read the original table again: check
+each one as in section 6, step 4. A person creates the search indexes again
 (section 6, step 3). After a rollback of path B with a type change the owner also reverts the
 writers to STRING. The rows that were loaded after the first swap hold a
 DATE in `COL`: the owner formats them back with the format string
@@ -993,8 +998,9 @@ kbagent --json workspace delete --project ALIAS --workspace-id WS_ID --yes
 
 Never add `--force` to this `delete-table`. Storage rejects the deletion of
 a table that an alias still points at, and `--force` deletes those aliases
-with the table. A rejection here means that an alias was missed: the owner
-creates it again on `B.T` (section 6, step 4), and the drop is repeated.
+with the table. No alias should point at `B.T_repart`: the aliases follow
+`B.T`. A rejection here means that one did not: hand it to the Connection
+maintainers (section 6, step 4) and repeat the drop after the repair.
 
 After the drop, the old data is reachable through BigQuery time travel (2 to
 7 days), and after that only through the 7-day fail-safe, which Google
