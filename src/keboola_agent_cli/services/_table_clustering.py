@@ -50,6 +50,25 @@ def stored_clustering(table: dict[str, Any]) -> list[str] | None:
     return [str(field) for field in fields] if isinstance(fields, list) and fields else None
 
 
+def _can_skip_write(table: dict[str, Any], before: list[str] | None) -> bool:
+    """Whether an equal clustering may be answered without a write.
+
+    A table that cannot carry clustering (alias, untyped, not BigQuery, external
+    bucket) also reads as "no clustering"; ``--clear`` on it must reach Storage,
+    whose 422 becomes ``INVALID_ARGUMENT``. Stored clustering implies a table that has it.
+    """
+    if table.get("isAlias"):
+        return False
+    if before is not None:
+        return True
+    bucket = table.get("bucket") if isinstance(table.get("bucket"), dict) else {}
+    return (
+        bool(table.get("isTyped"))
+        and str(bucket.get("backend") or "").lower() == "bigquery"
+        and not bucket.get("hasExternalSchema")
+    )
+
+
 def _not_allowed_as_invalid_argument(exc: KeboolaApiError) -> KeboolaApiError:
     """Storage's clustering refusal is a usage error: another table or other columns fix it."""
     if exc.status_code == 422 and exc.details.get("api_error_code") == (
@@ -66,8 +85,8 @@ def _not_allowed_as_invalid_argument(exc: KeboolaApiError) -> KeboolaApiError:
 
 
 def _reported_branch_id(client: Any, branch_id: int | None) -> int | None:
-    """The ID of the branch the request goes to; production resolves to the default branch."""
-    if branch_id is not None:
+    """The ID of the branch the request goes to; production (None or 0) is the default branch."""
+    if branch_id:
         return branch_id
     try:
         return find_default_branch_id(client.list_dev_branches())
@@ -119,9 +138,9 @@ class TableClusteringMixin(BaseService):
                     "dry_run": True,
                     **base,
                     "clustering": requested,
-                    "would_change": bool(table.get("isAlias")) or before != requested,
+                    "would_change": before != requested or not _can_skip_write(table, before),
                 }
-            if not table.get("isAlias") and before == requested:
+            if before == requested and _can_skip_write(table, before):
                 return {**base, "clustering": before, "status": "unchanged", "job_id": None}
             try:
                 job = client.update_table_definition(
