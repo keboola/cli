@@ -202,7 +202,6 @@ When the operator cannot read these objects, refuse the table.
 ### Sharing, features, writers, readers, aliases
 
 ```bash
-kbagent --json storage bucket-detail --project ALIAS --bucket-id B
 kbagent --json sharing edges --project ALIAS
 kbagent --json project info --project ALIAS
 kbagent --json storage tables --project ALIAS --bucket-id B --include-usage
@@ -210,8 +209,8 @@ kbagent --json flow list --project ALIAS --with-schedules
 kbagent --json storage tables --project ALIAS
 ```
 
-- **Sharing.** Record `sharing` of the bucket and every edge in which the
-  bucket is the source.
+- **Sharing.** Record every edge in which the bucket is the source. The
+  bucket detail has no `sharing` key, so the edges are the record.
 - **Policy tags.** Look for the project feature `bigquery-policy-tags` in
   `features` of the project info. When any column carries a policy tag in
   BigQuery (the policy tags per column recorded in "BigQuery-native objects"
@@ -320,7 +319,6 @@ Policy tags per column (bq show):
 Project feature bigquery-policy-tags (yes / no):
 Backend capability policyTagsEnabled (yes / no / unknown):
 sql_path:
-Bucket sharing:
 Sharing edges with the bucket as source:
 Writers (used_by, flows, schedules):
 Readers:
@@ -767,8 +765,8 @@ table. Then, in this order:
    the alias then equals `B.T` and differs from `B.T_repart`. An alias that
    follows `B.T_repart` was not created again. Stop the day-7 drop until the
    owner has done it.
-5. **Shared bucket.** Check the bucket with `storage bucket-detail`: the
-   sharing is the same as recorded.
+5. **Shared bucket.** Read `sharing edges` again: the edges with the bucket
+   as source are the same as recorded.
 
 On exit 4 with `STORAGE_JOB_TIMEOUT`: wait with `storage job-detail --wait`
 (the command of section 4) and never re-run the swap. On the error
