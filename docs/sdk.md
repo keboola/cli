@@ -176,6 +176,8 @@ print(res.imported_rows, res.warnings)
 
 The import is an async Storage job. `wait=False` returns as soon as it is queued (the upload of the file itself is always awaited) with `job_id` / `job_status` set and `imported_rows=None`; `timeout=` sets the wait budget (default 600 s). The result always carries `file_id` -- the Storage file the CSV was uploaded as. A wait that runs out raises `KeboolaApiError` `STORAGE_JOB_TIMEOUT` with `retryable=False` and `details={"job_id", "file_id"}`: the import keeps running server-side, so follow it instead of uploading again (an incremental re-upload duplicates rows). Any failure after the upload carries `details["file_id"]`.
 
+`import_method=` (`"auto"` | `"single_statement"` | `"multi_statement"`, default `"auto"`) chooses how a Snowflake import writes the table, as `--import-method` does on the CLI; `"auto"` sends nothing. Any other value first reads the bucket's backend and raises `KeboolaApiError` `INVALID_ARGUMENT` before the upload when it is not Snowflake (a bucket it cannot read, e.g. 403 or 404, is not refused: the upload goes on and Storage decides; Storage's refusal, HTTP 400 `storage.tables.importMethodNotSupported`, is then raised as `INVALID_ARGUMENT` too, as on the CLI and serve, with `details["file_id"]` of the uploaded file); an unknown value raises `ValueError` before any request. The result carries `import_method`.
+
 ```python
 res = kbc.upload_table("in.c-big.events", "events.csv.gz", incremental=True, wait=False)
 job = kbc.storage_job(res.job_id, wait=True, timeout=3600)

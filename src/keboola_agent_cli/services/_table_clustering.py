@@ -10,7 +10,7 @@ from ..constants import CLUSTERING_UPDATE_NOT_ALLOWED_CODE, STORAGE_JOB_MAX_WAIT
 from ..effective_branch import resolve_branch
 from ..errors import ErrorCode, KeboolaApiError
 from ._storage_jobs import resolve_wait_timeout, with_job_timeout_hint
-from .base import BaseService
+from .base import BaseService, find_default_branch_id
 
 
 def _invalid(message: str) -> KeboolaApiError:
@@ -65,6 +65,16 @@ def _not_allowed_as_invalid_argument(exc: KeboolaApiError) -> KeboolaApiError:
     return exc
 
 
+def _reported_branch_id(client: Any, branch_id: int | None) -> int | None:
+    """The ID of the branch the request goes to; production resolves to the default branch."""
+    if branch_id is not None:
+        return branch_id
+    try:
+        return find_default_branch_id(client.list_dev_branches())
+    except KeboolaApiError:
+        return None
+
+
 class TableClusteringMixin(BaseService):
     """The ``storage clustering-set`` half of ``StorageService``."""
 
@@ -82,7 +92,8 @@ class TableClusteringMixin(BaseService):
 
         Storage enqueues a job even when the clustering does not change, so the
         stored clustering is read first and an equal request returns
-        ``status: "unchanged"`` without a write.
+        ``status: "unchanged"`` without a write. The result keeps only the
+        documented keys; the Storage job result is not passed through.
 
         Raises:
             ValueError: ``timeout`` is zero, negative, NaN or infinite.
@@ -95,28 +106,23 @@ class TableClusteringMixin(BaseService):
         branch_id = resolve_branch(self._config_store, alias, branch_id)
         project = self.resolve_projects([alias])[alias]
         client = self._client_factory(project.stack_url, project.token)
-        base = {"project_alias": alias, "table_id": table_id, "branch_id": branch_id}
         try:
             table = client.get_table_detail(table_id, branch_id=branch_id)
             before = stored_clustering(table)
+            base = {
+                "table_id": table_id,
+                "branch_id": _reported_branch_id(client, branch_id),
+                "clustering_before": before,
+            }
             if dry_run:
                 return {
                     "dry_run": True,
                     **base,
-                    "clustering_before": before,
                     "clustering": requested,
                     "would_change": bool(table.get("isAlias")) or before != requested,
                 }
             if not table.get("isAlias") and before == requested:
-                return {
-                    **base,
-                    "clustering_before": before,
-                    "clustering": before,
-                    "status": "unchanged",
-                    "job_id": None,
-                    "result": None,
-                    "message": f"Clustering of table '{table_id}' is already as requested.",
-                }
+                return {**base, "clustering": before, "status": "unchanged", "job_id": None}
             try:
                 job = client.update_table_definition(
                     table_id,
@@ -147,14 +153,7 @@ class TableClusteringMixin(BaseService):
                 )
         finally:
             client.close()
-        action = "removed from" if requested is None else "set on"
-        return {
-            **base,
-            "clustering_before": before,
-            "clustering": after,
-            "status": "updated",
-            "job_id": job.get("id"),
-            "result": job,
-            "warnings": warnings,
-            "message": f"Clustering {action} table '{table_id}' in project '{alias}'.",
-        }
+        result = {**base, "clustering": after, "status": "updated", "job_id": job.get("id")}
+        if warnings:
+            result["warnings"] = warnings
+        return result

@@ -13,8 +13,9 @@ from typing import Any
 from ..constants import STORAGE_BRANCHES_FEATURE, TABLE_DATA_JOB_MAX_WAIT
 from ..effective_branch import resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
-from ..models import ProjectConfig
+from ..models import ImportMethod, ProjectConfig
 from ._column_descriptions import ColumnDescriptionsMixin, is_unchanged_description
+from ._import_method import refuse_unsupported_import_method
 from ._storage_downloads import (
     DownloadProgress,
     file_download_target,
@@ -29,6 +30,7 @@ from ._storage_jobs import (
     resolve_wait_timeout,
     summarize_storage_job,
     validate_wait_timeout,
+    with_auto_created_note,
     with_import_hint,
     with_job_timeout_hint,
 )
@@ -36,6 +38,7 @@ from ._storage_tables import (
     build_bigquery_layout,
     build_table_source,
     normalize_table_rows,
+    parse_default_assignments,
     refuse_production_clone,
 )
 from ._table_clustering import TableClusteringMixin
@@ -128,29 +131,6 @@ def _parse_column_spec(
     if col_name in defaults:
         definition["default"] = defaults[col_name]
     return {"name": col_name, "definition": definition}
-
-
-def _parse_default_assignments(defaults: list[str] | None) -> dict[str, str]:
-    """Parse ``--default NAME=VALUE`` assignments into a mapping.
-
-    An empty VALUE (e.g. ``--default flag=``) is accepted and produces an
-    empty-string default, consistent with how most shells pass trailing
-    ``=`` arguments.
-    """
-    if not defaults:
-        return {}
-    result: dict[str, str] = {}
-    for spec in defaults:
-        if "=" not in spec:
-            raise ValueError(
-                f"Invalid --default {spec!r}. Expected 'NAME=VALUE' (e.g. 'flag=false')."
-            )
-        name, _, value = spec.partition("=")
-        name = name.strip()
-        if not name:
-            raise ValueError(f"Invalid --default {spec!r}: empty column name.")
-        result[name] = value
-    return result
 
 
 def _ensure_bucket_exists_in_branch(
@@ -709,7 +689,7 @@ class StorageService(ColumnDescriptionsMixin, TableClusteringMixin):
         branch_id = resolve_branch(self._config_store, alias, branch_id)
         max_wait = resolve_wait_timeout(timeout, TABLE_DATA_JOB_MAX_WAIT)
         not_null_set = set(not_null_columns or [])
-        defaults_map = _parse_default_assignments(defaults)
+        defaults_map = parse_default_assignments(defaults)
 
         # --source-branch-id only qualifies a source table; on its own it would
         # be silently dropped (source mode never activates). Fail fast instead.
@@ -920,6 +900,7 @@ class StorageService(ColumnDescriptionsMixin, TableClusteringMixin):
         wait: bool = True,
         timeout: float | None = None,
         on_progress: Callable[[int, int], None] | None = None,
+        import_method: ImportMethod | str = ImportMethod.auto,
     ) -> dict[str, Any]:
         """Upload a CSV file into a storage table.
 
@@ -940,6 +921,8 @@ class StorageService(ColumnDescriptionsMixin, TableClusteringMixin):
                 upload is always awaited); ``imported_rows`` is then None.
             timeout: Import wait budget in seconds (None = IMPORT_JOB_MAX_WAIT).
             on_progress: ``(bytes_sent, total_bytes)`` callback for the upload.
+            import_method: How a Snowflake import writes the table; ``auto``
+                sends nothing (platform default).
 
         Returns:
             Dict with import results, ``file_id`` / ``job_id`` / ``job_status``,
@@ -963,6 +946,9 @@ class StorageService(ColumnDescriptionsMixin, TableClusteringMixin):
 
         client = self._client_factory(project.stack_url, project.token)
         try:
+            import_method = refuse_unsupported_import_method(
+                client, table_id, import_method, branch_id, creates_missing_bucket=auto_create
+            )
             if auto_create:
                 parts = table_id.split(".")
                 if len(parts) == 3:
@@ -1014,6 +1000,7 @@ class StorageService(ColumnDescriptionsMixin, TableClusteringMixin):
                 wait=wait,
                 max_wait=timeout,
                 on_progress=on_progress,
+                import_method=import_method,
             )
         except KeboolaApiError as exc:
             options = ImportOptions(
@@ -1021,8 +1008,12 @@ class StorageService(ColumnDescriptionsMixin, TableClusteringMixin):
                 delimiter=delimiter,
                 enclosure=enclosure,
                 branch_id=branch_id,
+                import_method=ImportMethod(import_method),
             )
-            raise with_import_hint(exc, alias, table_id, options) from exc
+            hinted = with_import_hint(exc, alias, table_id, options)
+            raise with_auto_created_note(
+                hinted, table_id, bucket=auto_created_bucket, table=auto_created_table
+            ) from exc
         finally:
             client.close()
 
@@ -1030,6 +1021,7 @@ class StorageService(ColumnDescriptionsMixin, TableClusteringMixin):
             "project_alias": alias,
             "table_id": table_id,
             "incremental": incremental,
+            "import_method": import_method.value,
             "file_size_bytes": file_size_bytes,
             "file_id": outcome.file_id,
             **import_job_fields(outcome.job, outcome.file_id),
@@ -2100,6 +2092,7 @@ class StorageService(ColumnDescriptionsMixin, TableClusteringMixin):
         *,
         wait: bool = True,
         timeout: float | None = None,
+        import_method: ImportMethod | str = ImportMethod.auto,
     ) -> dict[str, Any]:
         """Load an existing Storage File into a table.
 
@@ -2116,14 +2109,16 @@ class StorageService(ColumnDescriptionsMixin, TableClusteringMixin):
             branch_id: If set, target a specific dev branch.
             wait: If False, return once the import job is queued.
             timeout: Import wait budget in seconds (None = IMPORT_JOB_MAX_WAIT).
+            import_method: How a Snowflake import writes the table; ``auto``
+                sends nothing (platform default).
 
         Returns:
             Dict with import results plus ``job_id`` / ``job_status``.
         """
         branch_id = resolve_branch(self._config_store, alias, branch_id)
         validate_wait_timeout(timeout)
-        projects = self.resolve_projects([alias])
-        project = projects[alias]
+        project = self.resolve_projects([alias])[alias]
+        import_method = ImportMethod(import_method)
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -2136,6 +2131,7 @@ class StorageService(ColumnDescriptionsMixin, TableClusteringMixin):
                 branch_id=branch_id,
                 wait=wait,
                 max_wait=timeout,
+                import_method=import_method,
             )
         except KeboolaApiError as exc:
             options = ImportOptions(
@@ -2143,6 +2139,7 @@ class StorageService(ColumnDescriptionsMixin, TableClusteringMixin):
                 delimiter=delimiter,
                 enclosure=enclosure,
                 branch_id=branch_id,
+                import_method=import_method,
             )
             raise with_import_hint(exc, alias, table_id, options) from exc
         finally:
@@ -2153,6 +2150,7 @@ class StorageService(ColumnDescriptionsMixin, TableClusteringMixin):
             "file_id": file_id,
             "table_id": table_id,
             "incremental": incremental,
+            "import_method": import_method.value,
             **import_job_fields(job, file_id),
         }
 
