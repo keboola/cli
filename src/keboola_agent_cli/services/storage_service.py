@@ -38,6 +38,7 @@ from ._storage_tables import (
     build_bigquery_layout,
     build_table_source,
     normalize_table_rows,
+    parse_default_assignments,
     refuse_production_clone,
 )
 from ._table_clustering import TableClusteringMixin
@@ -130,29 +131,6 @@ def _parse_column_spec(
     if col_name in defaults:
         definition["default"] = defaults[col_name]
     return {"name": col_name, "definition": definition}
-
-
-def _parse_default_assignments(defaults: list[str] | None) -> dict[str, str]:
-    """Parse ``--default NAME=VALUE`` assignments into a mapping.
-
-    An empty VALUE (e.g. ``--default flag=``) is accepted and produces an
-    empty-string default, consistent with how most shells pass trailing
-    ``=`` arguments.
-    """
-    if not defaults:
-        return {}
-    result: dict[str, str] = {}
-    for spec in defaults:
-        if "=" not in spec:
-            raise ValueError(
-                f"Invalid --default {spec!r}. Expected 'NAME=VALUE' (e.g. 'flag=false')."
-            )
-        name, _, value = spec.partition("=")
-        name = name.strip()
-        if not name:
-            raise ValueError(f"Invalid --default {spec!r}: empty column name.")
-        result[name] = value
-    return result
 
 
 def _ensure_bucket_exists_in_branch(
@@ -711,7 +689,7 @@ class StorageService(ColumnDescriptionsMixin, TableClusteringMixin):
         branch_id = resolve_branch(self._config_store, alias, branch_id)
         max_wait = resolve_wait_timeout(timeout, TABLE_DATA_JOB_MAX_WAIT)
         not_null_set = set(not_null_columns or [])
-        defaults_map = _parse_default_assignments(defaults)
+        defaults_map = parse_default_assignments(defaults)
 
         # --source-branch-id only qualifies a source table; on its own it would
         # be silently dropped (source mode never activates). Fail fast instead.
