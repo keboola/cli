@@ -51,7 +51,9 @@ the "row-level-security" project feature, which this project does not have.` (fo
 `clsPolicies` the message starts with `Column-level security`, for both lists with
 `Row- and column-level security`). One feature covers both RLS and CLS. During the
 free public beta (until 28 February 2027) a project admin turns it on in Project
-settings → Features; from 1 March 2027 only Keboola (a super-admin) enables it.
+settings → Features. Such a deploy has a second requirement: the app must log in
+every path with OAuth/OIDC. A `password` provider, a public path or no login rule
+is refused with `... requires an OAuth/OIDC login ...`.
 
 **Who a rule selects (policy schema 1.2.0; since 1.2.0).** A rule selects readers
 by `subjects` -- `<idp>|<sub>` entries, the issuer of the identity provider, a `|`
@@ -176,7 +178,7 @@ is not a user's) is refused with the same 403.
   `rlsPolicies` / `clsPolicies` can be deployed (without it the deploy is refused
   with `... requires the "row-level-security" project feature, which this project
   does not have.`). A project admin enables it in Project settings → Features
-  during the public beta (until 28 February 2027); after that only Keboola does.
+  during the free public beta (until 28 February 2027).
 
 ### Restrict one workspace to some policies (bindings)
 

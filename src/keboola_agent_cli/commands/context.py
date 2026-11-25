@@ -1705,7 +1705,9 @@ workspace for its `query_data` tool. The same feature is required to deploy a Da
 App whose config sets `runtime.workspace.rlsPolicies` / `clsPolicies` (refused
 otherwise: `... requires the "row-level-security" project feature, which this
 project does not have.`); during the public beta (until 28 February 2027) a
-project admin turns it on in Project settings -> Features, later only Keboola. An ordinary reader
+project admin turns it on in Project settings -> Features. Such an app must also log in
+every path with OAuth/OIDC (a `password` provider, a public path or no login rule is
+refused). An ordinary reader
 who may not read a table (no policy on it, or no rule selects them) gets an empty result;
 an administrator behind a Storage token gets the refusal `Row-level security does not
 allow this query`. The identity that queries needs a matching rule.
