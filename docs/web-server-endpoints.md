@@ -9,7 +9,7 @@ auth, and the concepts behind these routes live in
 [`web-server.md`](web-server.md); a running server serves the same spec
 interactively at `/docs` (Swagger) and `/openapi.json`.
 
-**276 operations** across **233 paths** and **34 routers**.
+**280 operations** across **235 paths** and **34 routers**.
 
 Paths are shown as the server registers them. Reaching them through the
 Node BFF (or single-process `--ui` mode) prefixes every path with `/api`.
@@ -296,7 +296,7 @@ Flow Notifications-tab recipients (Notification Service subscriptions) -- audit 
 | `POST` | `/notifications/{project}/{subscription_id}/replace-recipient` | Replace a subscription's recipient |
 | `POST` | `/notifications/{project}/{subscription_id}/clone` | Create a subscription from an existing one |
 
-### `data-apps` (19 operations)
+### `data-apps` (23 operations)
 
 Python/JS (default), Streamlit and R data apps -- create, deploy, start/stop, manage secrets. Mirrors `kbagent data-app *`.
 
@@ -310,6 +310,10 @@ Python/JS (default), Streamlit and R data apps -- create, deploy, start/stop, ma
 | `POST` | `/data-apps/{project}/{app_id}/deploy` | Deploy a data app version |
 | `POST` | `/data-apps/{project}/{app_id}/start` | Start a data app |
 | `POST` | `/data-apps/{project}/{app_id}/stop` | Stop a data app |
+| `GET` | `/data-apps/{project}/{app_id}/drafts` | List a data app's drafts |
+| `POST` | `/data-apps/{project}/{app_id}/drafts` | Create a python-js data app draft |
+| `DELETE` | `/data-apps/{project}/{app_id}/drafts` | Delete a python-js data app draft |
+| `POST` | `/data-apps/{project}/{app_id}/preview-link` | Mint a short-lived data app preview link |
 | `GET` | `/data-apps/{project}/{app_id}/password` | Get data app password metadata (password only with reveal=true) |
 | `GET` | `/data-apps/{project}/{app_id}/logs` | Tail data app container logs |
 | `GET` | `/data-apps/{project}/{app_id}/secrets` | List data app secrets |

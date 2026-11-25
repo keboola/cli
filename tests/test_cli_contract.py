@@ -652,6 +652,7 @@ CONFIRMING_COMMANDS: dict[str, str] = {
     "config state-set": "config state-set --project p --component-id c --config-id 1 --state {}",
     "config variables-clear": "config variables-clear --project p --component-id c --config-id 1",
     "data-app delete": "data-app delete --project p --app-id 1",
+    "data-app draft-delete": "data-app draft-delete --project p --app-id 1",
     "data-app git-credentials-create": (
         "data-app git-credentials-create --project p --app-id 1 --type http_token "
         "--permissions readOnly"

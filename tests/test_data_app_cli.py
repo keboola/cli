@@ -74,6 +74,66 @@ def _invoke(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("command", "flags", "method", "args", "kwargs", "response"),
+    [
+        (
+            "draft-create",
+            ["--git-branch", "feat"],
+            "create_data_app_draft",
+            ("feat",),
+            {},
+            {"draft": {"draft_id": "demo"}},
+        ),
+        (
+            "draft-delete",
+            ["--dry-run"],
+            "delete_data_app_draft",
+            (None,),
+            {"dry_run": True},
+            {"dry_run": True},
+        ),
+        (
+            "draft-list",
+            ["-L", "1"],
+            "list_data_app_drafts",
+            (),
+            {"limit": 1},
+            {"app_id": "42", "project_alias": "prod", "drafts": [], "count": 0},
+        ),
+        (
+            "preview-link",
+            ["--draft-id", "demo"],
+            "get_data_app_preview_link",
+            ("demo",),
+            {},
+            {"url": "https://example.test/#t=fake", "link_expires_at": "soon"},
+        ),
+    ],
+)
+def test_draft_commands_json(
+    tmp_path: Path,
+    command: str,
+    flags: list[str],
+    method: str,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    response: dict[str, Any],
+) -> None:
+    store = _setup_config(tmp_path, {"prod": {"token": TEST_TOKEN}})
+    mock = MagicMock()
+    handler = getattr(mock, method)
+    handler.return_value = response
+    result = _invoke(
+        ["--json", "data-app", command, "--app-id", "42", *flags],
+        store=store,
+        data_app_mock=mock,
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["data"] == response
+    handler.assert_called_once_with("prod", "42", *args, **kwargs)
+
+
 class TestDataAppList:
     def test_json_success(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "config"

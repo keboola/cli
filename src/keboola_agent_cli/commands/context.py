@@ -759,6 +759,14 @@ explicit Storage config version, never the empty shell the create writes.
     Delete the app: stops its deployments, Storage config to the trash.
     URL is permanently retired. Confirmation prompt unless --yes.
 
+  Draft workflow
+    Use the production app's Storage --config-id, not its --app-id; its
+    Git branch must already exist on the remote. A draft serves pushes
+    without a deploy. Keep the returned draft ID for preview and cleanup.
+    Omit --draft-id only when targeting the config ID of a legacy draft.
+    A preview URL is a temporary login credential: open it only in a browser
+    before it expires. Never include it in messages, files or logs.
+
   data-app password
     Give the user the password of a password-protected app WITHOUT printing
     it (0.96.1+; older versions printed it and needed a Manage API token).

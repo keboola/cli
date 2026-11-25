@@ -158,6 +158,10 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Show ONE key from parameters.dataApp.secrets | `kbagent data-app secrets-get --project PROJECT --app-id APP-ID --key KEY` |
 | Remove one or more app-runtime secrets. | `kbagent data-app secrets-remove --project PROJECT --app-id APP-ID --key KEY` |
 | Copy the password of a password-protected data app to the clipboard | `kbagent data-app password --project PROJECT --app-id APP-ID` |
+| Start a python-js draft on a Git branch without deploying or affecting production | `kbagent data-app draft-create --app-id APP-ID --project PROJECT --git-branch GIT-BRANCH` |
+| List the drafts of a data app | `kbagent data-app draft-list --app-id APP-ID --project PROJECT` |
+| Delete a draft without deleting its Git branch or production app | `kbagent data-app draft-delete --app-id APP-ID --project PROJECT` |
+| Mint a private, short-lived login link. | `kbagent data-app preview-link --app-id APP-ID --project PROJECT` |
 | List jobs of the active project, the given projects, or all projects | `kbagent job list --project PROJECT` |
 | Show detailed information about a specific job | `kbagent job detail --project PROJECT --job-id JOB-ID` |
 | Run a job for a component configuration | `kbagent job run --project PROJECT --component-id COMPONENT-ID --config-id CONFIG-ID` |

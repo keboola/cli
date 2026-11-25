@@ -28,6 +28,7 @@ from ._all_projects import (
     fanout_projects,
     finish_fanout,
 )
+from ._data_app_drafts import register_draft_commands
 from ._data_app_git import register_git_commands
 from ._data_app_password import (
     CopyOption,
@@ -1029,3 +1030,4 @@ def data_app_validate_repo(
 register_git_commands(data_app_app)
 register_secrets_commands(data_app_app)
 register_password_command(data_app_app)
+register_draft_commands(data_app_app)
