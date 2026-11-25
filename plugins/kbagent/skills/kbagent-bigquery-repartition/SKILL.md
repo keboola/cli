@@ -87,7 +87,10 @@ Then follow [references/runbook.md](references/runbook.md) from section 0.
   wait for an explicit yes from the operator. One yes covers one command.
 - **`--json` on every call**, before the subcommand.
 - **A timeout is not a failure.** `STORAGE_JOB_TIMEOUT` (exit 4) means the job
-  still runs on the server. Follow it with `storage job-detail --wait`. Never
+  still runs on the server. Follow it with `storage job-detail --wait`. The
+  one exception is the job of `workspace create`: its result holds the
+  workspace key, so it is read only through the filter of runbook section 1.
+  Never
   re-run a swap: a second swap swaps the tables back. Never re-run a copy: it
   starts a second copy.
 - **A half-moved swap stops the run.** On the error
