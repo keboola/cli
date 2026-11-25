@@ -9,7 +9,8 @@ description: >
   rollback with a second swap, and recovery of a half-moved swap. Triggers:
   partition table, repartition, recluster, clustering, BigQuery partitioning,
   time partitioning, swap tables, convert table layout, partition by date,
-  STRING date to DATE.
+  STRING date to DATE, integer range partitioning, partition by id,
+  RANGE_BUCKET.
 ---
 
 # Convert a BigQuery table to a partitioned and clustered layout
@@ -57,6 +58,7 @@ Classify the table before anything else. The class decides the path.
 |---|---|---|
 | Cluster only | The table needs clustering columns and no partitioning. | Copy and swap (runbook section 4, path A, without the partitioning flags). |
 | Partition, column ready | The partition column is DATE, DATETIME or TIMESTAMP. | Copy path (runbook section 4, path A). |
+| Partition, integer column | The partition column is INTEGER (INT64), for example an `id`. | Copy path with integer-range partitioning (runbook section 4, path A, range flags). |
 | Partition, column not ready | The date is held in a STRING column, or the table is untyped. | Type-change path (runbook section 4, path B). |
 | Any class, with a column default | At least one column has a default, whatever the partition column is. | Runbook section 4, path B: the copy path cannot set a default. Without a type change when the partition column is ready or the table is cluster only. |
 | No key | No partition column and no clustering column is confirmed. | Stop. Ask the table owner. |
@@ -70,7 +72,9 @@ Ask the operator for every input before any write. Do not guess one.
 3. Partition column. None for a cluster-only table.
 4. Granularity. The runbook gives the default in section 2 from the data
    (DAY when the table has at most 4,000 day partitions). The owner may
-   choose a coarser one (MONTH, YEAR).
+   choose a coarser one (MONTH, YEAR). For an INTEGER column section 2
+   computes the range start, end and interval from `MIN` and `MAX` of the
+   column; the owner may choose a wider interval.
 5. Clustering columns, at most 4, in order.
 6. Primary key of the table.
 7. The owner who pauses and resumes the writers.
@@ -80,6 +84,15 @@ Ask the operator for every input before any write. Do not guess one.
    dataset for the `bq` steps. Without it the runbook refuses the table.
 
 Then follow [references/runbook.md](references/runbook.md) from section 0.
+
+## Incremental loads after an integer-range conversion
+
+An integer-range layout lets an incremental load read only the partitions
+that its rows touch, but only with partition-aware import: the partition
+column must be in the table's primary key, and the output mapping of the
+writer sets `partition_aware_import: true` (in `storage.output.tables`, not
+in a component's `parameters`). One load may touch at most 4,000 partitions.
+Tell the owner this after the swap; changing the writer is the owner's step.
 
 ## Guardrails
 

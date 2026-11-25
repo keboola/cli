@@ -26,6 +26,7 @@ Placeholders used in every command:
 | `COL` | Partition column |
 | `C1`, `C2` | Clustering columns (at most 4) |
 | `PK` | Primary key column |
+| `START`, `END`, `INTERVAL` | Integer-range layout of an INTEGER `COL` (section 2) |
 | `OTHER` | Every remaining column |
 | `WS_ID` | ID of the helper workspace |
 | `CFG_ID` | ID of the helper transformation (path B) |
@@ -111,7 +112,8 @@ Read from the result:
   use the recorded values.
 - `rows_count`, `data_size_bytes`, `primary_key`, `last_import_date`.
 - `column_details[].native_type`: the type of every column. The type of `COL`
-  decides the path. DATE, DATETIME or TIMESTAMP is path A. STRING is path B.
+  decides the path. DATE, DATETIME or TIMESTAMP is path A. INTEGER is path A
+  with integer-range partitioning. STRING is path B.
   On an untyped table every column is STRING, so an untyped table is path B.
 - `column_details[].nullable`: whether each column accepts NULL. Record it
   per column. Section 5 compares it with the copy.
@@ -381,6 +383,14 @@ Replace it in every query of this runbook:
 
 For a STRING column run the profile query of section 4a first.
 
+An INTEGER column has no `DAY_EXPR`. Run this query instead of the one above:
+
+```bash
+kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT MIN(COL) AS min_value, MAX(COL) AS max_value, COUNTIF(COL IS NULL) AS null_count FROM T"
+```
+
+Section 2 computes the layout from `min_value` and `max_value`.
+
 `min_value` and `max_value` are dates, also for a STRING column (a `MIN` of
 the strings would be alphabetical). `days`, `months` and `years` count only
 dates from 1960-01-01 to 2159-12-31. BigQuery puts every date outside that
@@ -395,7 +405,7 @@ A cluster-only table skips the query, but it still loads the view: sections
 ```text
 Project alias:
 Table ID:
-Class (cluster only / column ready / column not ready):
+Class (cluster only / column ready / integer column / column not ready):
 Path (A / B):
 rows_count:
 data_size_bytes:
@@ -422,6 +432,8 @@ Readers:
 Aliases that point at the table (ID, project, filter, column sync):
 Project feature bigquery-persisted-alias-views (yes / no):
 Distinct days / months / years, out_of_range, min, max, null_count of the partition column:
+INTEGER column: min_value, max_value, null_count; START, END, INTERVAL (section 2):
+Partition column in primary_key (yes / no; partition-aware import needs yes):
 Table IAM policy JSON:
 Row access policies (must be none):
 Search indexes (CREATE statements):
@@ -461,6 +473,46 @@ BigQuery rejects a job that modifies more than 4,000 partitions. The limit is
 per job. So it binds the copy, and it also binds the output-mapping load of
 path B (section 4), which is a full load into the partitioned table.
 
+### INTEGER column: start, end and interval
+
+The layout is `RANGE_BUCKET(COL, GENERATE_ARRAY(START, END, INTERVAL))`:
+partitions `[START, START + INTERVAL)`, `[START + INTERVAL, ...)` up to `END`.
+Rows with NULL go to `__NULL__`, rows below `START` or from `END` up go to
+`__UNPARTITIONED__`. Three rules decide the values:
+
+- The copy writes every existing row in one job, so the existing rows must
+  span at most 4,000 partitions. The query keeps a margin and allows 3,990.
+- A table holds at most 10,000 partitions. `END` is `START + 9,998 *
+  INTERVAL`, which leaves two partitions for `__NULL__` and
+  `__UNPARTITIONED__`. New IDs above `MAX` fill the remaining partitions
+  before they reach `__UNPARTITIONED__`.
+- `INTERVAL` is a round number (1, 2 or 5 times a power of ten), the smallest
+  one that satisfies the first rule.
+
+Run it on the view that section 1 loaded:
+
+```bash
+kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "WITH s AS (SELECT MIN(COL) AS mn, MAX(COL) AS mx FROM T), c AS (SELECT m * CAST(POW(10, e) AS INT64) AS i FROM UNNEST([1, 2, 5]) AS m, UNNEST(GENERATE_ARRAY(0, 14)) AS e), k AS (SELECT mn, mx, i, (DIV(mn, i) - IF(mn < 0 AND MOD(mn, i) != 0, 1, 0)) * i AS start FROM s, c) SELECT mn, mx, i AS interval_value, start AS start_value, SAFE_ADD(start, SAFE_MULTIPLY(9998, i)) AS end_value, DIV(mx - start, i) + 1 AS existing_partitions, 9998 - (DIV(mx - start, i) + 1) AS free_partitions FROM k WHERE DIV(mx - start, i) + 1 <= 3990 AND SAFE_ADD(start, SAFE_MULTIPLY(9998, i)) IS NOT NULL ORDER BY i LIMIT 1"
+```
+
+Record `START` = `start_value`, `END` = `end_value`, `INTERVAL` =
+`interval_value`. An empty result (the IDs span more than 5 * 10^14 * 3,990,
+or `END` would overflow INT64) stops the run: ask the owner, and delete the helper workspace.
+
+Show the owner `free_partitions` with `INTERVAL`: the table takes about
+`free_partitions * INTERVAL` more IDs before new rows land in
+`__UNPARTITIONED__`. The owner may choose a wider round interval for more
+headroom; recompute `START` and `END` with it (`START` is `MIN` rounded down
+to a multiple of the interval, also for a negative `MIN`; `END` is
+`START + 9,998 * INTERVAL`). A
+narrower interval than the query gives is never used: the copy would fail on
+the 4,000-partition limit.
+
+Record whether `COL` is in `primary_key`. The conversion does not need it,
+but partition-aware import does (../SKILL.md, "Incremental loads after an
+integer-range conversion"). When it is not, tell the owner that incremental
+loads will still read the whole table.
+
 ## 3. Pause writers (owner)
 
 The owner stops every writer recorded in section 1: loads, Direct Grant
@@ -488,7 +540,10 @@ waiting and has not started yet; `--status processing` would miss it.
 Section 1 read the partition values before the writers were paused. Now
 that they are paused, run the partition-value query of section 1 again, and
 for a STRING column the two queries of section 4a. `bad_values` must be 0,
-and the counts must give the granularity that section 2 chose. When they do
+and the counts must give the granularity that section 2 chose. For an
+INTEGER column `min_value` must still be at least `START`, and `max_value`
+must still give at most 3,990 existing partitions (`DIV(max_value - START,
+INTERVAL) + 1`). When they do
 not, go back to section 2, or stop as section 4a says.
 
 Count the rows of the table right before the copy, with a query on the view
@@ -517,6 +572,17 @@ kbagent --json storage create-table --project ALIAS --bucket-id B --name T_repar
 
 Use the granularity of section 2. For a cluster-only table omit both
 `--time-partitioning-*` flags.
+
+For an INTEGER column use the range flags with the values of section 2
+instead of the `--time-partitioning-*` flags:
+
+```bash
+kbagent --json storage create-table --project ALIAS --bucket-id B --name T_repart \
+  --source-table-id B.T --range-partitioning-field COL \
+  --range-partitioning-start START --range-partitioning-end END \
+  --range-partitioning-interval INTERVAL \
+  --clustering-field C1 --primary-key PK --timeout 3600
+```
 
 `--primary-key` takes one column. Repeat it for every column of
 `primary_key` recorded in section 1, in the same order, and omit it when the
@@ -799,7 +865,9 @@ helper workspace.
   value recorded for `B.T` in section 1. A missing default is a mismatch.
 - **Layout.** `definition.timePartitioning` and `definition.clustering` of the
   copy are as requested, `timePartitioning.expirationMs` included when
-  section 1 recorded one.
+  section 1 recorded one. For an INTEGER column
+  `definition.rangePartitioning` holds `COL`, `START`, `END` and `INTERVAL`
+  of section 2.
 - **Policy tags.** The tags of each column, read from BigQuery in section
   4c, equal the tags recorded for the source in section 1. A source column
   with a tag that the copy lacks stops the conversion. `policyTagState` is
@@ -836,6 +904,14 @@ the query counts per partition of the new table:
 | DAY | `DAY_EXPR` |
 | MONTH | `DATE_TRUNC(DAY_EXPR, MONTH)` |
 | YEAR | `DATE_TRUNC(DAY_EXPR, YEAR)` |
+
+For an INTEGER column both are the same expression, which puts each row
+into its integer-range partition and keeps the two special partitions
+apart:
+
+```sql
+CASE WHEN COL IS NULL THEN '__NULL__' WHEN COL < START OR COL >= END THEN '__UNPARTITIONED__' ELSE CAST(START + DIV(COL - START, INTERVAL) * INTERVAL AS STRING) END
+```
 
 Build both from `DAY_EXPR` of section 1, with the type that `COL` has on
 that table:
