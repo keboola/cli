@@ -231,7 +231,13 @@ Record each object together with what is needed to create it again:
 - **Search indexes**: the `CREATE SEARCH INDEX` statement of each index.
   Check that each statement is complete: the index name, the indexed columns
   or `ALL COLUMNS`, and every option of the existing index. When a statement
-  cannot be reconstructed completely, refuse the table.
+  cannot be reconstructed completely, refuse the table. When the table has
+  an index, ask the owner which BigQuery edition the project's queries run
+  under. `CREATE SEARCH INDEX` fails in the Standard edition
+  ("SEARCH_INDEX CREATE or DROP DDL is disallowed in STANDARD edition"),
+  while an index that was created earlier can still exist there. When the
+  edition does not allow the statement, or nobody knows, refuse the table:
+  the index could not be created again after the swap.
 - **Streaming buffer**: the key `streamingBuffer` in the output of the last
   command. Present means that a streaming writer wrote recently (section 3).
 - **Policy tags per column**: from the output of the last command. This
@@ -329,6 +335,8 @@ command above):
 - The owner cannot say which aliases point at the table.
 - The BigQuery-native objects are unknown, because nobody could read them.
 - The recorded statement of a search index is incomplete.
+- The table has a search index and the BigQuery edition of the project does
+  not allow `CREATE SEARCH INDEX`, or the edition is unknown.
 - The operator cannot apply the recorded IAM bindings to the copy.
 - The copy was created without a policy tag that the source has (section 4c).
 - No partition column and no clustering column is confirmed.
@@ -412,6 +420,7 @@ Distinct days / months / years, out_of_range, min, max, null_count of the partit
 Table IAM policy JSON:
 Row access policies (must be none):
 Search indexes (CREATE statements):
+BigQuery edition allows CREATE SEARCH INDEX (yes / no / unknown; only with an index):
 Streaming buffer (present / absent):
 Owner who pauses the writers:
 ```
@@ -703,8 +712,9 @@ section (section 1). Keep this order:
    bq --project_id=GCP_PROJECT set-iam-policy DATASET.T_repart T.iam.json
    ```
 
-3. **Search indexes** are not created here. A rename drops them, so they are
-   created again in section 6.
+3. **Search indexes** are not created here. This runbook assumes that a
+   rename drops them, so they are created again in section 6. The assumption
+   was not verified on a table with an index.
 
 When one of these steps cannot be done, stop. Do not swap. Run the abort
 step (section 4d), and refuse the table.
@@ -904,10 +914,14 @@ the swap. Then, in this order:
    bq --project_id=GCP_PROJECT query --use_legacy_sql=false 'CREATE SEARCH INDEX INDEX_NAME ON DATASET.T (ALL COLUMNS)'
    ```
 
-   Use the recorded statement of each index, not this example. When a
-   statement fails, retry it. When it fails again, report the missing index to
-   the owner and leave the table swapped: the first swap already dropped the
-   indexes on both tables, so a second swap restores nothing.
+   Use the recorded statement of each index, not this example. First read
+   the indexes of `B.T` with the `SEARCH_INDEXES` query of section 1: an
+   index that is still there is not created again. When a statement fails,
+   retry it, except when the error says that the statement is disallowed in
+   the edition: a retry cannot pass then. When the index cannot be created,
+   report the missing index to the owner and leave the table swapped: under
+   the assumption above the first swap dropped the indexes on both tables,
+   so a second swap restores nothing.
 4. **Aliases.** Every alias recorded in section 1 now reads the new `B.T`.
    Check each one before the writers resume. Read it with `storage
    table-detail`: it answers without an error, and its columns and
