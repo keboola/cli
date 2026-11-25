@@ -31,13 +31,13 @@ generated, authoritative list).
 | `update_config_row` | `kbagent config row-update` | |
 | `update_sql_transformation` | `kbagent transformation edit` | |
 | `docs_query` | `kbagent docs query` | |
-| `create_conditional_flow` | `kbagent flow new` | |
+| `create_conditional_flow` | `kbagent flow new` | Since vNEXT, infers implicit job types and reports invalid conditions at their paths (MCP #902); use `flow validate` to check a definition before writing. |
 | `create_flow` | `kbagent flow new` | legacy `keboola.orchestrator` flows were dropped in 0.57.0; kbagent creates conditional flows (`keboola.flow`) only |
 | `get_flow_examples` | `kbagent flow examples` | |
 | `get_flow_schema` | `kbagent flow schema` | `--full` for the JSON Schema |
 | `get_flows` | `kbagent flow list` | or `flow detail` |
 | `modify_flow` | `kbagent flow update` | |
-| `update_flow` | `kbagent flow update` | |
+| `update_flow` | `kbagent flow update` | Since vNEXT, applies the same job inference and condition checks as `flow new` to the merged definition. |
 | `get_jobs` | `kbagent job list` | or `job detail` |
 | `run_job` | `kbagent job run` | add `--wait` to collect the result |
 | `create_oauth_url` | `kbagent config oauth-url` | |

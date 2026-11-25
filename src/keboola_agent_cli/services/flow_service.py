@@ -47,7 +47,11 @@ from .flow_run_selection import (
     summarize_task_results,
     task_failure_warning,
 )
-from .flow_validation import find_unreachable_phases, validate_conditional_flow
+from .flow_validation import (
+    find_unreachable_phases,
+    validate_conditional_flow,
+    with_inferred_job_task_types,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +147,7 @@ class FlowSchemaFetch:
     ``schema`` holds the JSON Schema dict on success and is ``None`` when it
     could not be obtained; ``reason`` explains the failure (``None`` on
     success). A ``None`` schema must NOT block a write -- callers degrade to
-    semantic-only validation and surface ``reason`` as a warning.
+    local validation and surface ``reason`` as a warning.
 
     ``error`` holds the API error when the request itself failed (network,
     auth, HTTP status). A caller that reports the failure as an error keeps
@@ -333,7 +337,7 @@ class FlowService(BaseService):
         Returns a ``FlowSchemaFetch`` with ``schema`` set on success, or
         ``schema=None`` + a ``reason`` when the schema cannot be obtained
         (network error, KeboolaApiError, malformed or empty schema). A ``None``
-        schema must NOT block a write -- the caller degrades to semantic-only
+        schema must NOT block a write -- the caller degrades to local
         validation and surfaces ``reason`` as a warning.
         """
         ai_client = self._ai_client_factory(project.stack_url, project.token)
@@ -343,7 +347,7 @@ class FlowService(BaseService):
             return FlowSchemaFetch(schema=None, reason=exc.message, error=exc)
         except Exception as exc:
             # Intentionally broad: ANY schema-fetch failure must degrade to
-            # semantic-only validation, never block the write. Narrowing to
+            # local validation, never block the write. Narrowing to
             # OSError-style transport errors would miss httpx exceptions
             # (httpx.HTTPError does not subclass OSError) and re-raise them.
             return FlowSchemaFetch(schema=None, reason=str(exc))
@@ -580,7 +584,10 @@ class FlowService(BaseService):
                 for pid in find_unreachable_phases(phases)
             )
 
-        configuration: dict[str, Any] = {"phases": phases, "tasks": tasks}
+        configuration: dict[str, Any] = {
+            "phases": phases,
+            "tasks": with_inferred_job_task_types(tasks),
+        }
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -661,7 +668,7 @@ class FlowService(BaseService):
 
                 configuration = dict(current_body)
                 configuration["phases"] = merged_phases
-                configuration["tasks"] = merged_tasks
+                configuration["tasks"] = with_inferred_job_task_types(merged_tasks)
 
             result = client.update_config(
                 component_id=FLOW_COMPONENT_ID,

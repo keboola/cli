@@ -92,11 +92,11 @@ EOF
 
 # 3. Validate; loop until clean. Pass --project to fetch the LIVE schema from the
 #    stack for full structural + semantic validation. Without --project you get
-#    semantic-only checks plus a note that structural validation was skipped.
+#    local condition and semantic checks plus a note that the live schema was skipped.
 kbagent --json flow validate --definition-file flow.yaml --project prod
 
 # 4. Create. flow new fetches the live schema and validates on write; a
-#    schema-fetch failure degrades to semantic-only + a warning (never blocks).
+#    schema-fetch failure skips Draft 7 checks only and adds a warning.
 kbagent --json flow new --project prod --name "Daily ETL" --definition-file flow.yaml
 ```
 
@@ -110,6 +110,25 @@ with one `flow update` that carries the phases and their tasks together.
 the same broken bodies (since 1.4.1), but prefer the `flow` commands.
 
 ## Conditions cookbook
+
+Since vNEXT, `flow new`, `flow update`, and `flow validate` check conditions
+by type and operator, even without the live schema. Fix each reported path
+(for example, `phases[0].next[1].condition.operands[2]`); the hint lists the
+allowed operators. An inner `task` with `componentId` or `component_id` and
+no `type` is treated as a job; explicitly supplied types are not changed.
+
+Since vNEXT, the bundled `flow schema --full` documents
+`ANY_TASKS_IN_ANY_PHASE` (checks finished tasks across phases) and
+`CONTINUE_ON_FAILURE`. The latter takes a `phase` and a `tasks` list of task
+IDs allowed to fail (which can be empty), instead of operands:
+
+```yaml
+condition:
+  type: operator
+  operator: CONTINUE_ON_FAILURE
+  phase: "extract"
+  tasks: ["optional-extract"]
+```
 
 ```yaml
 # A task in another phase succeeded:
@@ -379,7 +398,7 @@ timeout is safe. Undo with `config restore --component-id keboola.flow`.
 ## Validation errors
 
 `flow new` / `flow update` validate the body against the **live** conditional-flow
-JSON Schema (fetched at runtime from the stack) plus semantic checks; failures
+JSON Schema (fetched at runtime from the stack) plus local checks; failures
 raise `INVALID_FLOW_DEFINITION` with all violation messages joined. Run
 `flow validate --definition-file flow.yaml --project PROJECT` (with `--project` to fetch the
 live schema) to see them. Common causes:
@@ -406,7 +425,7 @@ refuses ("Flow must have exactly one first step"), so validation refuses it.
 
 If the live schema fetch fails (network error, or the AI Service returns no
 `configurationSchema` for `keboola.flow`), the write is **not** blocked:
-structural validation is skipped, the semantic checks still run (the Storage API
+structural validation is skipped, the local checks still run (the Storage API
 does not validate flow configs server-side), and a
 `structural schema validation skipped: <reason>` warning is surfaced on the
 result. `flow validate` without `--project` behaves the same way and adds a note

@@ -546,7 +546,7 @@ def flow_validate(
         "-p",
         help=(
             f"Project alias or ID whose stack gives the live JSON Schema ({PROJECT_DEFAULT}; "
-            "without any project, only the semantic checks run)"
+            "without any project, only the local checks run)"
         ),
     ),
 ) -> None:
@@ -554,10 +554,9 @@ def flow_validate(
 
     The live keboola.flow JSON Schema is fetched from the stack of the project
     (``--project``, else the T1 chain) and structural validation runs alongside
-    the semantic checks; a fetch failure degrades gracefully (semantic-only + a
-    warning). When no project is registered or chosen, only the semantic checks
-    run and a note records that structural schema validation was skipped (no
-    schema source).
+    the local condition and semantic checks. On a fetch failure or when no
+    project is registered or chosen, the local checks still run and a note
+    records that structural schema validation was skipped.
 
     Exit 0 when valid (warnings still printed), exit 2 when there are errors.
     """

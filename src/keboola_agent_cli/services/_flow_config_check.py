@@ -19,7 +19,7 @@ FLOW_COMPONENT_ID = "keboola.flow"
 def check_flow_configuration(component_id: str, configuration: dict[str, Any] | None) -> None:
     """Raise ``INVALID_FLOW_DEFINITION`` when a keboola.flow body would be broken.
 
-    The semantic checks of ``validate_conditional_flow`` (no schema fetch: the
+    The local checks of ``validate_conditional_flow`` (no schema fetch: the
     `flow` commands add the live schema), on the body the write leaves. Every
     body is checked, ``{}`` too ("no phases"); the callers skip the check only
     where nothing is written to the body: `config new` without

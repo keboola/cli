@@ -310,7 +310,7 @@
       "properties": {
         "task": {
           "type": "string",
-          "description": "ID of the task to evaluate. The referenced task must have already completed execution. Set '*' when used with phase operators (ALL_TASKS_IN_PHASE, ANY_TASKS_IN_PHASE)"
+          "description": "ID of the task to evaluate. The referenced task must have already completed execution. Set '*' when used with phase operators (ALL_TASKS_IN_PHASE, ANY_TASKS_IN_PHASE) or the flow-level ANY_TASKS_IN_ANY_PHASE operator"
         },
         "type": {
           "enum": [
@@ -525,6 +525,69 @@
             }
           },
           "description": "Phase-level operators that apply conditions to all or any tasks within a specific phase"
+        },
+        {
+          "required": [
+            "operator",
+            "operands"
+          ],
+          "description": "Flow-level operator that applies the condition to any finished task across all phases",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "operator"
+              ]
+            },
+            "operator": {
+              "type": "string",
+              "enum": [
+                "ANY_TASKS_IN_ANY_PHASE"
+              ],
+              "description": "True when the condition is true for at least one finished task in any phase. Tasks that have not finished are ignored."
+            },
+            "operands": {
+              "type": "array",
+              "description": "Conditions to apply to each finished task. Use '*' as the task ID in task conditions.",
+              "items": {
+                "$ref": "#/definitions/operatorCondition"
+              }
+            }
+          }
+        },
+        {
+          "required": [
+            "operator",
+            "phase",
+            "tasks"
+          ],
+          "description": "Phase-level operator requiring all tasks of a phase to succeed except the tasks listed as allowed to fail",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "operator"
+              ]
+            },
+            "operator": {
+              "type": "string",
+              "enum": [
+                "CONTINUE_ON_FAILURE"
+              ],
+              "description": "Evaluates all tasks in the specified phase with the listed exceptions. Takes no operands."
+            },
+            "phase": {
+              "type": "string",
+              "description": "ID of the phase whose tasks are evaluated."
+            },
+            "tasks": {
+              "type": "array",
+              "description": "IDs of tasks that may fail. May be empty.",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
         }
       ],
       "required": [
