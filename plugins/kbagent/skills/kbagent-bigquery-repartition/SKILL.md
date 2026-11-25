@@ -74,6 +74,8 @@ Ask the operator for every input before any write. Do not guess one.
 5. Clustering columns, at most 4, in order.
 6. Primary key of the table.
 7. The owner who pauses and resumes the writers.
+   When the partition column is a STRING: the date format string of its
+   values (default `%Y-%m-%d`).
 8. Confirmation that the operator has BigQuery access to the project's
    dataset for the `bq` steps. Without it the runbook refuses the table.
 

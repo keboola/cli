@@ -33,6 +33,18 @@ Placeholders used in every command:
 | `GCP_PROJECT` | Google Cloud project of the Keboola project |
 | `DATASET` | BigQuery dataset of bucket `B` |
 
+In the SQL of this runbook `T`, `T_repart`, `COL`, `PK`, `C1` and `OTHER`
+stand for identifiers. A name that is not a plain identifier (it contains a
+dash, or it is a reserved word such as `order`, `group` or `rows`) must be
+quoted with backticks in BigQuery. A backtick inside a double-quoted shell
+argument starts a command substitution, so pass such a query with
+`--sql-file PATH` (`workspace query`, `transformation create`) and never
+inside `--sql "..."`.
+
+For a STRING partition column the owner gives the date format string, an
+input of the skill. The default is `%Y-%m-%d`. Put it in place of
+`%Y-%m-%d` in every query.
+
 `DATASET` is in `sql_path` and `backend_path` of the table detail (section 1).
 `GCP_PROJECT` is the first segment of `sql_path` only when the path has three
 segments. Storage often leaves the project out, and then `sql_path` is
@@ -289,6 +301,10 @@ command above):
 - The operator cannot apply the recorded IAM bindings to the copy.
 - The copy was created without a policy tag that the source has (section 4c).
 - No partition column and no clustering column is confirmed.
+- The table goes through path B and has a RECORD (STRUCT) column or a
+  REPEATED column (`type` and `mode` of `schema.fields` in the `bq show`
+  output). `create-table --column` takes a name, a type and a length only,
+  so path B cannot create such a column.
 - `data_size_bytes` is over 5 TiB (5,497,558,138,880 bytes). This version
   does not convert such a table: it has no procedure that copies a table in
   ranges. Hand the table to the owner.
@@ -303,7 +319,7 @@ into the helper workspace as a view:
 
 ```bash
 kbagent --json workspace load --project ALIAS --workspace-id WS_ID --table-id B.T --load-type view
-kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT COUNT(DISTINCT DAY_EXPR) AS days, COUNT(DISTINCT DATE_TRUNC(DAY_EXPR, MONTH)) AS months, MIN(COL) AS min_value, MAX(COL) AS max_value, COUNTIF(COL IS NULL) AS null_count FROM T"
+kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT COUNT(DISTINCT IF(DAY_EXPR BETWEEN DATE '1960-01-01' AND DATE '2159-12-31', DAY_EXPR, NULL)) AS days, COUNT(DISTINCT IF(DAY_EXPR BETWEEN DATE '1960-01-01' AND DATE '2159-12-31', DATE_TRUNC(DAY_EXPR, MONTH), NULL)) AS months, COUNT(DISTINCT IF(DAY_EXPR BETWEEN DATE '1960-01-01' AND DATE '2159-12-31', DATE_TRUNC(DAY_EXPR, YEAR), NULL)) AS years, COUNTIF(DAY_EXPR < DATE '1960-01-01' OR DAY_EXPR > DATE '2159-12-31') AS out_of_range, MIN(DAY_EXPR) AS min_value, MAX(DAY_EXPR) AS max_value, COUNTIF(COL IS NULL) AS null_count FROM T"
 ```
 
 `workspace load` writes to the project (a view), not to the table. It still
@@ -320,6 +336,12 @@ Replace it in every query of this runbook:
 | STRING (path B) | `SAFE.PARSE_DATE('%Y-%m-%d', COL)`, with the owner's format string in place of `%Y-%m-%d` |
 
 For a STRING column run the profile query of section 4a first.
+
+`min_value` and `max_value` are dates, also for a STRING column (a `MIN` of
+the strings would be alphabetical). `days`, `months` and `years` count only
+dates from 1960-01-01 to 2159-12-31. BigQuery puts every date outside that
+range into one partition, `__UNPARTITIONED__`, and `out_of_range` counts
+those rows.
 
 A cluster-only table skips the query, but it still loads the view: sections
 3 and 5 count rows through it.
@@ -355,7 +377,7 @@ Writers (used_by, flows, schedules):
 Readers:
 Aliases that point at the table (ID, columns, filter, column sync):
 Owner creates the aliases again after the swap (yes / no aliases):
-Distinct days / months, min, max, null_count of the partition column:
+Distinct days / months / years, out_of_range, min, max, null_count of the partition column:
 Table IAM policy JSON:
 Row access policies (must be none):
 Search indexes (CREATE statements):
@@ -365,26 +387,30 @@ Owner who pauses the writers:
 
 ## 2. Choose granularity
 
-Use the `days`, `months` and `null_count` values of section 1. Rows with NULL
-in `COL` go to one more partition (`__NULL__`), and it counts toward the
-limit. So add 1 to both counts when `null_count` is above 0:
+Use the `days`, `months`, `years`, `null_count` and `out_of_range` values of
+section 1. Rows with NULL in `COL` go to one more partition (`__NULL__`), and
+rows with a date outside 1960-01-01 to 2159-12-31 go to one more
+(`__UNPARTITIONED__`). Both count toward the limit. So add 1 to each count
+when `null_count` is above 0, and 1 more when `out_of_range` is above 0:
 
-- `day_partitions` = `days`, plus 1 when `null_count` is above 0.
-- `month_partitions` = `months`, plus 1 when `null_count` is above 0.
+- `day_partitions` = `days`, plus those.
+- `month_partitions` = `months`, plus those.
+- `year_partitions` = `years`, plus those.
 
 | Partitions | Granularity | Flag |
 |---|---|---|
 | `day_partitions` at most 4,000 | DAY | `--time-partitioning-type DAY` |
 | `day_partitions` over 4,000, `month_partitions` at most 4,000 | MONTH | `--time-partitioning-type MONTH` |
-| `month_partitions` over 4,000 | Stop. Ask the owner. | |
+| `month_partitions` over 4,000, `year_partitions` at most 4,000 | YEAR | `--time-partitioning-type YEAR` |
+| `year_partitions` over 4,000 | Stop. Ask the owner. | |
 
 The table gives the default. The owner may choose a coarser granularity than
 the table gives (MONTH instead of DAY, or YEAR): record that the owner chose
 it, and use `--time-partitioning-type MONTH` or `YEAR`. A finer granularity
 than the table gives is never used.
 
-On that stop, delete the helper workspace (the `workspace delete` command of
-section 1). No other object exists yet.
+On the stop of the last row, delete the helper workspace (the `workspace
+delete` command of section 1). No other object exists yet.
 
 BigQuery rejects a job that modifies more than 4,000 partitions. The limit is
 per job. So it binds the copy, and it also binds the output-mapping load of
@@ -410,6 +436,12 @@ kbagent --json job list --project ALIAS --status processing
   BigQuery refuses to rename a table for about 5 hours after the last
   streaming write, sometimes longer. Section 6 checks this before the swap.
 - **DML.** A running DML statement on the table blocks the rename.
+
+Section 1 read the partition values before the writers were paused. Now
+that they are paused, run the partition-value query of section 1 again, and
+for a STRING column the two queries of section 4a. `bad_values` must be 0,
+and the counts must give the granularity that section 2 chose. When they do
+not, go back to section 2, or stop as section 4a says.
 
 Count the rows of the table right before the copy, with a query on the view
 that section 1 loaded, and record the result as the row count before the
@@ -487,7 +519,8 @@ Path B has two variants. Decide which one applies before 4a:
 
 #### 4a. Profile the column (variant with a type change only)
 
-The format string is an input from the owner. The default is `%Y-%m-%d`.
+The format string is the input from the owner (section 0). The default is
+`%Y-%m-%d`.
 
 ```bash
 kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT COUNTIF(COL IS NOT NULL AND SAFE.PARSE_DATE('%Y-%m-%d', COL) IS NULL) AS bad_values, COUNTIF(COL IS NULL) AS null_count, COUNT(*) AS total FROM T"
@@ -538,7 +571,7 @@ the transformation without `--created-table`, then set both mappings:
 
 ```bash
 kbagent --json transformation create --project ALIAS --component-id keboola.google-bigquery-transformation \
-  --name "repartition T" --sql "CREATE TABLE T_repart (PK STRING NOT NULL, COL DATE, C1 STRING, OTHER STRING) AS SELECT PK, SAFE.PARSE_DATE('%Y-%m-%d', COL) AS COL, C1, OTHER FROM T"
+  --name "repartition T" --sql "CREATE TABLE T_repart (PK STRING NOT NULL, COL DATE, C1 STRING, OTHER STRING) AS SELECT PK, PARSE_DATE('%Y-%m-%d', COL) AS COL, C1, OTHER FROM T"
 kbagent --json transformation edit --project ALIAS --config-id CFG_ID --change-description "map repartition tables" \
   --storage '{"input": {"tables": [{"source": "B.T", "destination": "T"}]}, "output": {"tables": [{"source": "T_repart", "destination": "B.T_repart", "primary_key": ["PK"]}]}}'
 kbagent --json job run --project ALIAS --component-id keboola.google-bigquery-transformation --config-id CFG_ID --wait --timeout 3600
@@ -550,9 +583,16 @@ order, as `--primary-key` of section 4b. An output mapping whose key differs
 from the key of the destination table does not load as it is. Omit
 `primary_key` only when the table has no primary key.
 
+The fill uses `PARSE_DATE`, not `SAFE.PARSE_DATE`: a value that does not
+parse fails the job instead of becoming NULL without a trace. Section 4a
+found no such value, so a failure here means that a write landed after it.
+
 The `CREATE TABLE` statement names every column with its type, and `NOT
 NULL` for every column recorded with `nullable: false` in section 1. Use the
-types of the definition in 4b. A plain `CREATE TABLE T_repart AS SELECT ...`
+types of the definition in 4b, written as BigQuery SQL types: `INTEGER` is
+`INT64`, `FLOAT` is `FLOAT64`, `BOOLEAN` is `BOOL`; `STRING`, `NUMERIC`,
+`BIGNUMERIC`, `DATE`, `DATETIME`, `TIME`, `TIMESTAMP`, `BYTES`, `JSON` and
+`GEOGRAPHY` keep their name. A plain `CREATE TABLE T_repart AS SELECT ...`
 creates every column nullable; the output mapping then tries to change the
 NOT NULL columns of the table from 4b, and the job fails ("column's mode
 changed: REQUIRED -> NULLABLE"). Write the types without a length and
@@ -688,7 +728,14 @@ helper workspace.
   with a tag that the copy lacks stops the conversion. `policyTagState` is
   not part of this check.
 - **Table IAM bindings.** The bindings of the copy equal the recorded ones.
-- **Path B, NULL count.** The count of NULL in `COL` is equal on both tables.
+- **Path B with a type change, NULL count.** The count of NULL in `COL` is
+  equal on both tables. The per-partition query below cannot show this: it
+  parses `COL` of the old table, so a string that does not parse and a NULL
+  land in the same group. Count the NULLs directly:
+
+  ```bash
+  kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT (SELECT COUNTIF(COL IS NULL) FROM T) AS old_nulls, (SELECT COUNTIF(COL IS NULL) FROM T_repart) AS new_nulls"
+  ```
 
 kbagent cannot read IAM bindings. The operator reads them on the copy:
 
