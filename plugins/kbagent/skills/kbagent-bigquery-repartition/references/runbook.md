@@ -493,7 +493,7 @@ the transformation without `--created-table`, then set both mappings:
 
 ```bash
 kbagent --json transformation create --project ALIAS --component-id keboola.google-bigquery-transformation \
-  --name "repartition T" --sql "CREATE TABLE T_repart AS SELECT PK, SAFE.PARSE_DATE('%Y-%m-%d', COL) AS COL, C1, OTHER FROM T"
+  --name "repartition T" --sql "CREATE TABLE T_repart (PK STRING NOT NULL, COL DATE, C1 STRING, OTHER STRING) AS SELECT PK, SAFE.PARSE_DATE('%Y-%m-%d', COL) AS COL, C1, OTHER FROM T"
 kbagent --json transformation edit --project ALIAS --config-id CFG_ID --change-description "map repartition tables" \
   --storage '{"input": {"tables": [{"source": "B.T", "destination": "T"}]}, "output": {"tables": [{"source": "T_repart", "destination": "B.T_repart", "primary_key": ["PK"]}]}}'
 kbagent --json job run --project ALIAS --component-id keboola.google-bigquery-transformation --config-id CFG_ID --wait --timeout 3600
@@ -505,8 +505,19 @@ order, as `--primary-key` of section 4b. An output mapping whose key differs
 from the key of the destination table does not load as it is. Omit
 `primary_key` only when the table has no primary key.
 
+The `CREATE TABLE` statement names every column with its type, and `NOT
+NULL` for every column recorded with `nullable: false` in section 1. Use the
+types of the definition in 4b. A plain `CREATE TABLE T_repart AS SELECT ...`
+creates every column nullable; the output mapping then tries to change the
+NOT NULL columns of the table from 4b, and the job fails ("column's mode
+changed: REQUIRED -> NULLABLE"). Write the types without a length and
+without a default. Whether the load keeps the length and the default that 4b
+set was not verified: the Length and Column defaults checks of section 5
+catch a loss.
+
 Without a type change the SELECT lists every column unchanged, `COL`
-included: `CREATE TABLE T_repart AS SELECT PK, COL, C1, OTHER FROM T`.
+included, and the column list keeps the type of `COL`:
+`CREATE TABLE T_repart (PK STRING NOT NULL, COL DATE, C1 STRING, OTHER STRING) AS SELECT PK, COL, C1, OTHER FROM T`.
 
 The column list in the SELECT is the full column list of the source, in the
 order of the source. Run `config delete` only after a successful job: it
