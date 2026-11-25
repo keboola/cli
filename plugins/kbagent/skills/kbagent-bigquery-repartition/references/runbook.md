@@ -67,7 +67,7 @@ preflight record at the end of the section.
 
 ```bash
 kbagent --json storage table-detail --project ALIAS --table-id B.T \
-  | jq '.data | (.definition | if type=="object" then . else {} end) as $d | {is_alias, rows_count, data_size_bytes, primary_key, last_import_date, sql_path, backend_path, column_details, layout: ($d | {timePartitioning, rangePartitioning, clustering, requirePartitionFilter}), policy_tags: [($d.columns | if type=="array" then .[] else empty end) | {name, policyTagState}]}'
+  | jq '.data | (.definition | if type=="object" then . else {} end) as $d | {backend, is_alias, typed_columns: ([($d.columns | if type=="array" then .[] else empty end) | select((.definition | type) == "object" and .definition.type != null)] | length), rows_count, data_size_bytes, primary_key, last_import_date, sql_path, backend_path, column_details, layout: ($d | {timePartitioning, rangePartitioning, clustering, requirePartitionFilter}), policy_tags: [($d.columns | if type=="array" then .[] else empty end) | {name, policyTagState}]}'
 ```
 
 The filter prints `definition.requirePartitionFilter` as
@@ -81,7 +81,16 @@ and is unbounded.
 
 Read from the result:
 
+- `backend`. Refuse the table when it is not `bigquery`.
 - `is_alias`. Refuse the table when it is true.
+- `typed_columns`: the number of columns that carry a native type in
+  `definition`. 0 means that the table is untyped. The table detail has no
+  other key that says so, and on an untyped table `column_details` is not a
+  schema: `native_type`, `nullable` and `length` are missing, or they are
+  hints that a component wrote to the column metadata (a hint can say `DATE`
+  on a column that BigQuery holds as STRING). So for an untyped table ignore
+  those three keys and record every column as `STRING`, nullable, without a
+  length and without a default. Sections 4b and 5 use the recorded values.
 - `rows_count`, `data_size_bytes`, `primary_key`, `last_import_date`.
 - `column_details[].native_type`: the type of every column. The type of `COL`
   decides the path. DATE, DATETIME or TIMESTAMP is path A. STRING is path B.
@@ -96,7 +105,8 @@ Read from the result:
   already DATE, DATETIME or TIMESTAMP, or the table is cluster only, it takes
   path B **without a type change** (section 4, path B).
 - `definition.timePartitioning`, `rangePartitioning`, `clustering`: the
-  current layout.
+  current layout. Record `timePartitioning.expirationMs` when it is set: the
+  copy does not inherit it (section 4).
 - `definition.requirePartitionFilter`. Refuse the table when it is true. Every
   query of this runbook (the partition-value profile, the row counts of
   sections 3 and 5) reads the whole table without a partition predicate, and
@@ -110,10 +120,21 @@ Read from the result:
   operator reads from BigQuery ("BigQuery-native objects" below).
 - `sql_path`: the BigQuery path of the table.
 
-Three refuse rules need only this result: the table is an alias,
-`requirePartitionFilter` is true, or `data_size_bytes` is over 5 TiB
-("Refuse rules" below). Check them now. A table that is refused here leaves
-nothing behind, because nothing was created yet.
+The table detail does not say whether the bucket is linked from another
+project: a table of a linked bucket has `is_alias: false`. Read the bucket:
+
+```bash
+kbagent --json storage bucket-detail --project ALIAS --bucket-id B | jq '.data | {backend, is_linked}'
+```
+
+Refuse the table when `is_linked` is true. A linked bucket is read-only in
+this project, so it cannot hold `T_repart`.
+
+Five refuse rules need only these two results: the backend is not BigQuery,
+the bucket is linked, the table is an alias, `requirePartitionFilter` is
+true, or `data_size_bytes` is over 5 TiB ("Refuse rules" below). Check them
+now. A table that is refused here leaves nothing behind, because nothing was
+created yet.
 
 ### Helper workspace
 
@@ -250,6 +271,8 @@ Refuse the table, and change nothing on it, when one of these holds. When
 the helper workspace already exists, delete it (the `workspace delete`
 command above):
 
+- The backend of the table is not BigQuery.
+- The bucket is linked from another project.
 - The table is an alias.
 - `definition.requirePartitionFilter` is true.
 - The table has at least one row access policy. Tables with row access
@@ -312,10 +335,14 @@ rows_count:
 data_size_bytes:
 primary_key:
 last_import_date:
+Backend (must be bigquery):
+Bucket linked (must be no):
+Typed (typed_columns above 0) / untyped:
 Columns and types:
 Nullable per column (column_details[].nullable):
 Length per column (column_details[].length):
 Current layout (timePartitioning / rangePartitioning / clustering):
+timePartitioning.expirationMs (when set):
 requirePartitionFilter (must not be true; null on an unpartitioned table):
 Column defaults (column_details[].default):
 policyTagState per column (Storage, last observed):
@@ -410,6 +437,16 @@ kbagent --json storage create-table --project ALIAS --bucket-id B --name T_repar
 
 Use the granularity of section 2. For a cluster-only table omit both
 `--time-partitioning-*` flags.
+
+`--primary-key` takes one column. Repeat it for every column of
+`primary_key` recorded in section 1, in the same order, and omit it when the
+table has no primary key. A comma-separated list is sent as one column name.
+
+When section 1 recorded `timePartitioning.expirationMs`, add
+`--time-partitioning-expiration-ms` with that value. The copy does not
+inherit the expiration, and without the flag the new table keeps its
+partitions for ever. Leave it out only when the owner asks to drop the
+expiration. Both rules hold for the `create-table` of path B too (4b).
 
 The copy keeps the columns, their types and NOT NULL of the source. It keeps
 the primary key that the command requests.
@@ -644,7 +681,8 @@ helper workspace.
 - **Column defaults.** `column_details[].default` of each column equals the
   value recorded for `B.T` in section 1. A missing default is a mismatch.
 - **Layout.** `definition.timePartitioning` and `definition.clustering` of the
-  copy are as requested.
+  copy are as requested, `timePartitioning.expirationMs` included when
+  section 1 recorded one.
 - **Policy tags.** The tags of each column, read from BigQuery in section
   4c, equal the tags recorded for the source in section 1. A source column
   with a tag that the copy lacks stops the conversion. `policyTagState` is
