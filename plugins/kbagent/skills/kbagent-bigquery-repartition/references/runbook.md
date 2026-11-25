@@ -256,11 +256,16 @@ kbagent --json sharing edges --project ALIAS
 kbagent --json project info --project ALIAS
 kbagent --json storage tables --project ALIAS --bucket-id B --include-usage
 kbagent --json flow list --project ALIAS --with-schedules
+kbagent --json schedule list --project ALIAS
 kbagent --json storage tables --project ALIAS
 ```
 
-- **Sharing.** Record every edge in which the bucket is the source. The
-  bucket detail has no `sharing` key, so the edges are the record.
+- **Sharing.** Record every edge in which the bucket is the source, and the
+  bucket's entry in `shared_buckets` of the same output: a bucket that is
+  shared but not linked yet has no edge. The bucket detail has no `sharing`
+  key, so this output is the record. It is empty, without an error, for a
+  project that kbagent holds without a project ID (`project list` shows
+  none): then ask the owner.
 - **Policy tags.** Look for the project feature `bigquery-policy-tags` in
   `features` of the project info. When any column carries a policy tag in
   BigQuery (the policy tags per column recorded in "BigQuery-native objects"
@@ -275,7 +280,15 @@ kbagent --json storage tables --project ALIAS
   exists from that moment, readable by every dataset reader, and the check
   of section 4c can only refuse and drop it afterwards, not undo the read.
 - **Writers and readers.** Record `used_by` of `B.T`, and the flows with
-  schedules that run those configurations.
+  schedules that run those configurations. Three more sources, because
+  `flow list --with-schedules` shows only the schedules of `keboola.flow`
+  flows: `schedule list` shows every schedule, also one that runs a
+  configuration directly; `legacy_orchestrator_count` above 0 in the flow
+  list means that the project has orchestrator flows that the list leaves
+  out; and `flow triggers --project ALIAS --flow-id ID` shows a table
+  trigger of a flow. `used_by` reads input and output mappings only. It does
+  not see a transformation that reads `DATASET.T` directly in SQL: ask the
+  owner for those.
 - **Aliases.** kbagent shows that a table is an alias (`is_alias`), but not
   which table the alias points at. List every table of the project with
   `is_alias: true` from the last command, and ask the owner which of them
@@ -438,8 +451,11 @@ changes no configuration and pauses nothing.
 Check that no job runs before the copy:
 
 ```bash
-kbagent --json job list --project ALIAS --status processing
+kbagent --json job list --project ALIAS --limit 100 | jq '[.data.jobs[] | select(.isFinished != true) | {id, status}]'
 ```
+
+The result must be empty. The filter also shows a job that is created or
+waiting and has not started yet; `--status processing` would miss it.
 
 - **Streaming.** Ask the owner for the time of the last streaming write and
   record it. Rows that were streamed recently can be invisible to the copy
@@ -954,11 +970,15 @@ kbagent --json storage table-detail --project ALIAS --table-id B.T | jq 'del(.da
 ```
 
 After a rollback the original physical table is back at `B.T`, with its IAM
-bindings. The aliases that the owner created again after the first swap now
+bindings. The operator reads the bindings and the policy tags once more on
+`B.T` (the `get-iam-policy` and policy tag commands of section 1) and stops
+on a difference from the values recorded in section 1. The aliases that the owner created again after the first swap now
 read `B.T_repart`: the owner deletes them and creates them again on `B.T`
 (section 6, step 4). A person creates the search indexes again
 (section 6, step 3). After a rollback of path B with a type change the owner also reverts the
-writers to STRING.
+writers to STRING. The rows that were loaded after the first swap hold a
+DATE in `COL`: the owner formats them back with the format string
+(`FORMAT_DATE`) when loading them into `B.T` again.
 
 Time travel of the new table starts at the copy. A restore to an earlier
 point is possible only from the old table.
@@ -1014,18 +1034,20 @@ Compare, for both tables, the physical state with the Storage rows:
 
 kbagent has no bucket refresh and no other command that repairs the metadata
 of a half-moved swap. Hand the evidence to the Connection maintainers
-(Storage). They finish or undo the metadata move. Continue only after both
-tables match their physical state. Where to continue depends on which swap
-failed:
+(Storage). They finish or undo the metadata move, and they say which of the
+two they did. Continue only after both tables match their physical state.
+Where to continue depends on which table `B.T` holds now, so read it first
+with `storage table-detail` and compare `definition` with the layout
+recorded in section 1:
 
-- **The first swap (section 6) failed.** `B.T` must now hold the new layout.
-  Continue at section 6, step 1.
-- **The rollback swap (section 8) failed.** `B.T` must now hold the old
-  layout and the original physical table. Do not use the steps of section 6.
-  Check with `storage table-detail` that `definition` of `B.T` shows the
-  layout recorded in section 1, then continue with the steps after the
-  rollback in section 8: the IAM bindings, the search indexes, the aliases
-  and, on path B, the writers.
+- **`B.T` holds the new layout** (the first swap was finished, or the
+  rollback swap was undone). Continue at section 6, step 1.
+- **`B.T` holds the old layout and the original physical table** (the
+  rollback swap was finished, or the first swap was undone). Do not use the
+  steps of section 6. Continue with the steps after the rollback in section
+  8: the IAM bindings and policy tags, the search indexes, the aliases and,
+  on path B, the writers. After an undone first swap `B.T_repart` is the
+  copy again: run the abort step (section 4d) or start again at section 5.
 
 ## 10. Cost and record
 
