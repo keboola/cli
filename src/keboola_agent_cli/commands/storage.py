@@ -5,6 +5,7 @@ Provides direct Storage API access including sharing/linked bucket metadata
 """
 
 from contextlib import nullcontext
+from enum import StrEnum
 from pathlib import Path
 
 import typer
@@ -56,6 +57,12 @@ storage_app = typer.Typer(help="Browse and manage storage buckets, tables, and f
 _BUCKETS = "Buckets"
 _TABLES = "Tables"
 _FILES = "Files"
+
+
+class _ParquetCompression(StrEnum):
+    NONE = "none"
+    SNAPPY = "snappy"
+
 
 # Surfaced in human mode whenever a branch-aware write completes against a
 # project lacking the `storage-branches` feature. The transformation runner
@@ -2099,6 +2106,12 @@ def storage_unload_table(
         "always sliced; with --download each slice is saved as its own file "
         "under --output (treated as a directory).",
     ),
+    compression: _ParquetCompression | None = typer.Option(
+        None,
+        "--compression",
+        help="Compression defaults to 'snappy' for Parquet and 'none' for CSV. "
+        "Snappy requires --file-type parquet.",
+    ),
     keep_slices: bool = typer.Option(
         False,
         "--keep-slices",
@@ -2130,6 +2143,12 @@ def storage_unload_table(
         )
         raise typer.Exit(code=2) from None
     formatter = get_formatter(ctx)
+    if compression == _ParquetCompression.SNAPPY and file_type != "parquet":
+        formatter.error(
+            message="--compression snappy requires --file-type parquet",
+            error_code=ErrorCode.INVALID_ARGUMENT,
+        )
+        raise typer.Exit(code=2) from None
     columns = split_multi(columns, label="--column") or None
     service = get_service(ctx, "storage_service")
     config_store: ConfigStore = ctx.obj["config_store"]
@@ -2162,6 +2181,7 @@ def storage_unload_table(
                 branch_id=effective_branch,
                 file_type=file_type,
                 keep_slices=keep_slices,
+                compression=compression.value if compression is not None else None,
                 on_progress=on_progress,
             )
     except ConfigError as exc:
