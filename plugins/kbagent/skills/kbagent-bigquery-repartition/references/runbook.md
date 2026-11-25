@@ -722,7 +722,8 @@ rewritten, for example by a full load. Tell the owner before the change.
 Applying a new clustering also returns a table that is in long-term storage
 to active storage pricing. Tell the owner that as well.
 When the owner wants every existing row reclustered at once, use copy and
-swap instead: sections 1 to 10, with path A without the partitioning flags.
+swap instead: sections 1 to 10, with path A without the partitioning flags,
+or with path B without a type change when a column has a default.
 
 **Availability.** Check that the installed kbagent has the command:
 
@@ -732,7 +733,8 @@ kbagent storage clustering-set --help
 
 When this fails (exit 2, no such command), the kbagent is older than the
 release that ships the command. Tell the operator, and fall back to copy and
-swap: sections 1 to 10, with path A without the partitioning flags.
+swap: sections 1 to 10, with path A without the partitioning flags,
+or with path B without a type change when a column has a default.
 
 **Preflight.** Nothing here writes. Section 0 still applies: no dev branch is
 active for the project.
