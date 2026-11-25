@@ -4251,9 +4251,16 @@ type inventory and examples.
   `storage.tables.clusteringUpdateNotAllowed`; kbagent reports `INVALID_ARGUMENT`,
   exit 2, with that code in `details.api_error_code`.
 - **Small result.** The result has `table_id`, `branch_id`, `clustering_before`,
-  `clustering`, `status`, `job_id` and, only when present, `warnings`. `branch_id` is
-  the branch used, the default branch ID for production (null only when the branch
-  list could not be read). The Storage job result is not passed through.
+  `clustering`, `status`, `job_id` and, only when present, `warnings` (in
+  `.data.warnings`, not the envelope's top-level `warnings`). `branch_id` is the
+  branch used, the default branch ID for production and for `--branch 0` (null only
+  when the branch list could not be read). The Storage job result is not passed
+  through. `--dry-run` returns `dry_run`, `table_id`, `branch_id`,
+  `clustering_before`, `clustering`, `would_change` (no `status`, no `job_id`).
+- **`--clear` on a table without clustering support reaches Storage.** An untyped,
+  non-BigQuery or external-bucket table has no clustering either, but kbagent does
+  not answer `unchanged` for it: Storage refuses with the 422 (`INVALID_ARGUMENT`), and
+  `--dry-run` reports `would_change: true`.
 - **A timeout does not cancel the job.** `STORAGE_JOB_TIMEOUT`, exit 4,
   `retryable: false`, `details.job_id`; the message names `storage job-detail --wait`
   and `storage table-detail`. Following the job is safe.
