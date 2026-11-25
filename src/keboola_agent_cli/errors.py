@@ -426,8 +426,9 @@ ERROR_TYPES: frozenset[str] = frozenset(
 # Spec rule E1 (docs/cli-interface-spec.md#E1): every ErrorCode has one entry,
 # and `map_error_to_exit_code` reads the exit code from here. The exit codes
 # follow the table in docs/cli-interface-spec.md#exit-codes: 1 general, 2 usage
-# or validation, 3 authentication, 4 network or a local wait that timed out, 5
-# configuration, 6 permission policy, 7 job terminated after its timeout.
+# or validation, 3 authentication, 4 network, a local wait that timed out or an
+# operation already running on the server, 5 configuration, 6 permission
+# policy, 7 job terminated after its timeout.
 # docs/error-codes.md lists the same pairs, and `scripts/check_error_codes.py`
 # fails when a code has no entry or the doc disagrees with this table.
 # An entry's exit keeps the code's existing behavior, and its type is the
