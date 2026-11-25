@@ -49,6 +49,7 @@ generated, authoritative list).
 | `modify_streamlit_data_app` | `kbagent data-app create` | update via `config update` + `data-app secrets-set` |
 | `get_project_info` | `kbagent project info` | |
 | `update_project_description` | `kbagent project description-set` | |
+| `get_accessible_projects` | `kbagent auth status` | `accessible_projects` lists the projects of the signed-in user. Over `kbagent serve`: `GET /auth/projects`. |
 | `query_data` | `kbagent workspace query` | intentionally unported (#390): `workspace query` composes multi-step SQL over a persistent workspace instead of an implicit one-shot SELECT |
 | `find_component_id` | `kbagent component list` | use `--query` |
 | `search` | `kbagent search` | |
