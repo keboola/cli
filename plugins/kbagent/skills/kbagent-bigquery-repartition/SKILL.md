@@ -4,8 +4,8 @@ description: >
   Use when converting one existing Keboola Storage table on BigQuery to a
   partitioned and/or clustered layout. Covers: the copy into a new layout and
   the swap into the production name, a date held in a STRING column (the
-  type-change path), a table over 5 TiB copied in ranges of the partition
-  column (the ranged copy path), the preflight of security objects (policy tags, table IAM
+  type-change path), a table over 5 TiB (a measured sample copy decides
+  between one copy and a copy in ranges of the partition column), the preflight of security objects (policy tags, table IAM
   bindings, row access policies, search indexes), validation before the swap,
   rollback with a second swap, and recovery of a half-moved swap. Triggers:
   partition table, repartition, recluster, clustering, BigQuery partitioning,
@@ -60,7 +60,8 @@ Classify the table before anything else. The class decides the path.
 | Partition, column ready | The partition column is DATE, DATETIME or TIMESTAMP. | Copy path (runbook section 4, path A). |
 | Partition, column not ready | The date is held in a STRING column, or the table is untyped. | Type-change path (runbook section 4, path B). |
 | Any class, with a column default | At least one column has a default, whatever the partition column is. | Runbook section 4, path B: the copy path cannot set a default. Without a type change when the partition column is ready or the table is cluster only. |
-| Over 5 TiB, or the owner's choice | `data_size_bytes` is over 5 TiB, or the owner chose a copy in ranges (for example because a copy would run past 4 hours). The table has a partition column. | Ranged copy (runbook section 4, path C): the empty table of path B, filled range by range. With or without a type change, as on path B. A cluster-only table or a table partitioned by ingestion time is refused. |
+| Over 5 TiB | `data_size_bytes` is over 5 TiB. | Size check (runbook section 2a): a sample copy is measured and extrapolated. Path A when the copy is estimated under 4 hours, otherwise the ranged copy (runbook section 4, path C: the empty table of path B, filled range by range, each range under 4 hours). A table that needs path B takes path C. Path C refuses a cluster-only table and a table partitioned by ingestion time. |
+| Ranged copy by choice | The owner chose a copy in ranges for a smaller table. | Runbook section 4, path C. |
 | No key | No partition column and no clustering column is confirmed. | Stop. Ask the table owner. |
 
 ## How to run this
