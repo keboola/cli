@@ -249,8 +249,9 @@ def output_diagram(
     warnings: Any = query_result.get("warnings")
     if output_format == "er":
         typer.echo(
-            # ER always lists columns; `--columns` only shapes the flowcharts.
-            DeepLineageService.render_er_diagram(edges, graph, node_fqn, warnings=warnings)
+            DeepLineageService.render_er_diagram(
+                edges, graph, node_fqn, show_columns=show_columns, warnings=warnings
+            )
         )
         return
     code = DeepLineageService.render_mermaid(

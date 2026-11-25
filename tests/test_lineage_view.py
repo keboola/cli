@@ -4,12 +4,14 @@ import io
 import json
 import re
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
 from keboola_agent_cli.cli import app
+from keboola_agent_cli.commands.lineage import _LineageHandler
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.services._lineage_trace import trace_column
 from keboola_agent_cli.services.deep_lineage_service import (
@@ -739,30 +741,74 @@ class TestReviewFixes:
         assert _indent(lines[ext_line]) > _indent(lines[cfg_line])
         assert sum("external: Slack" in ln for ln in lines) == 1
 
-    def test_er_always_lists_columns(self, tmp_path: Path) -> None:
-        code = _service(tmp_path).diagram(_column_chain(), MID, "both", 10, view="er")
+    @pytest.mark.parametrize("show_columns", [False, True])
+    def test_er_columns_toggle(self, tmp_path: Path, show_columns: bool) -> None:
+        graph = _column_chain()
+        graph.tables[SRC].primary_key = ["cust_name"]
+        code = _service(tmp_path).diagram(
+            graph, MID, "both", 10, view="er", show_columns=show_columns
+        )
 
-        assert "string cust_name" in code
-        assert "rows," not in code
-        cli = _show(tmp_path, _column_chain(), "--downstream", SRC, "--format", "er")
+        assert ("string cust_name PK" in code) == show_columns
+        assert ('"from cust_name"' in code) == show_columns
+        assert ("int rows" in code) != show_columns
+        flags = ["--columns"] if show_columns else []
+        cli = _show(tmp_path, graph, "--downstream", SRC, "--format", "er", *flags)
         assert cli.exit_code == 0, cli.output
-        assert "string cust_name" in cli.output
+        assert ("string cust_name PK" in cli.output) == show_columns
+        assert ("int rows" in cli.output) != show_columns
 
-    def test_er_renders_external_systems(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("show_columns", [False, True])
+    def test_er_empty_columns_keep_count(self, tmp_path: Path, show_columns: bool) -> None:
+        graph = LineageGraph()
+        _table(graph, SRC)
+        code = _service(tmp_path).diagram(
+            graph, SRC, "both", 3, view="er", show_columns=show_columns
+        )
+        assert 'int rows "0 rows, 0 cols"' in code
+
+    @pytest.mark.parametrize("show_columns", [False, True])
+    def test_er_server_columns_toggle(self, tmp_path: Path, show_columns: bool) -> None:
+        handler = object.__new__(_LineageHandler)
+        handler.graph = _column_chain()
+        handler.service = _service(tmp_path)
+        responses: list[str] = []
+
+        def capture(content: str, content_type: str) -> None:
+            assert content_type == "text/plain"
+            responses.append(content)
+
+        handler._serve = capture
+        handler._handle_mermaid(
+            urlparse(
+                f"/api/mermaid?node={MID}&direction=both&view=er"
+                f"&columns={str(show_columns).lower()}"
+            )
+        )
+        assert ("string cust_name" in responses[0]) == show_columns
+        assert ("int rows" in responses[0]) != show_columns
+
+    @pytest.mark.parametrize("show_columns", [False, True])
+    def test_er_renders_external_systems(self, tmp_path: Path, show_columns: bool) -> None:
         graph = _diamond(external=[{"system": "Slack", "op": "write"}])
-        code = _service(tmp_path).diagram(graph, C1, "both", 3, view="er")
+        code = _service(tmp_path).diagram(
+            graph, C1, "both", 3, view="er", show_columns=show_columns
+        )
 
         assert '"ext:Slack"' in code
         rels = [ln for ln in code.splitlines() if '"ext:Slack"' in ln and " : " in ln]
         assert any("p:t" in ln for ln in rels), code
         assert any("p:a" in ln for ln in rels), code
 
-    def test_er_external_only_config_is_not_empty(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("show_columns", [False, True])
+    def test_er_external_only_config_is_not_empty(self, tmp_path: Path, show_columns: bool) -> None:
         graph = LineageGraph()
         cfg = "p:kds-team.app-custom-python/slack"
         _config(graph, cfg, "Slack notifier", external=[{"system": "Slack", "op": "write"}])
 
-        code = _service(tmp_path).diagram(graph, cfg, "both", 3, view="er")
+        code = _service(tmp_path).diagram(
+            graph, cfg, "both", 3, view="er", show_columns=show_columns
+        )
 
         assert code.strip() != "erDiagram"
         assert '"Slack notifier"' in code and '"ext:Slack"' in code

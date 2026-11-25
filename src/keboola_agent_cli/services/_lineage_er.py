@@ -50,17 +50,16 @@ def _column_comment(
     return ""
 
 
-def _entity_lines(graph: LineageGraph, fqn: str, col_maps: dict[str, dict[str, str]]) -> list[str]:
-    """One table entity, its columns ALWAYS listed as attributes.
-
-    The ER view exists to show columns; without them it was a row-count line
-    per table (the rows/cols summary is kept only for a table with no known
-    columns, since mermaid needs at least one attribute inside braces).
-    """
+def _entity_lines(
+    graph: LineageGraph, fqn: str, col_maps: dict[str, dict[str, str]], *, show_columns: bool
+) -> list[str]:
+    """One table entity with column attributes or a compact count line."""
     t = graph.tables[fqn]
     lines = [f'    "{_table_entity(graph, fqn)}" {{']
-    if not t.columns:
-        lines.append(f'        int rows "{t.rows_count:,} rows, 0 cols"')
+    if not show_columns or not t.columns:
+        lines.append(f'        int rows "{t.rows_count:,} rows, {len(t.columns)} cols"')
+        lines.append("    }")
+        return lines
     pk_cols = set(t.primary_key or [])
     for col in t.columns[:_MAX_ER_COLUMNS]:
         safe_col = re.sub(r"[^a-zA-Z0-9_]", "_", col)
@@ -108,12 +107,14 @@ def render_er_diagram(
     edges: list[dict],
     graph: LineageGraph,
     node_fqn: str,
+    show_columns: bool = False,
     warnings: list[str] | None = None,
 ) -> str:
     """Render lineage as a mermaid ER diagram.
 
-    Tables are entities with their columns (PK markers, AI column mappings as
-    comments); relationships are ``input table --config--> output table``;
+    Tables show row/column counts unless ``show_columns`` enables columns
+    with PK markers and AI mapping comments. Relationships are
+    ``input table --config--> output table``;
     AI-recorded external systems are ``ext:<system>`` entities.
 
     ``warnings`` carries non-fatal notes -- the ambiguity warning of #568,
@@ -148,7 +149,7 @@ def render_er_diagram(
             col_maps[cfg] = {**col_maps.get(cfg, {}), **cm}
 
     for fqn in sorted(table_fqns):
-        lines.extend(_entity_lines(graph, fqn, col_maps))
+        lines.extend(_entity_lines(graph, fqn, col_maps, show_columns=show_columns))
 
     input_of: dict[str, list[str]] = {}  # config -> [input table fqns]
     output_of: dict[str, list[str]] = {}  # config -> [output table fqns]
