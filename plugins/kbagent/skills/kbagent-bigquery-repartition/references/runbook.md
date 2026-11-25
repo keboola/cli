@@ -277,7 +277,7 @@ into the helper workspace as a view:
 
 ```bash
 kbagent --json workspace load --project ALIAS --workspace-id WS_ID --table-id B.T --load-type view
-kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT COUNT(DISTINCT DAY_EXPR) AS days, COUNT(DISTINCT DATE_TRUNC(DAY_EXPR, MONTH)) AS months, MIN(COL) AS min_value, MAX(COL) AS max_value, COUNTIF(COL IS NULL) AS nulls FROM T"
+kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT COUNT(DISTINCT DAY_EXPR) AS days, COUNT(DISTINCT DATE_TRUNC(DAY_EXPR, MONTH)) AS months, MIN(COL) AS min_value, MAX(COL) AS max_value, COUNTIF(COL IS NULL) AS null_count FROM T"
 ```
 
 `workspace load` writes to the project (a view), not to the table. It still
@@ -326,7 +326,7 @@ Writers (used_by, flows, schedules):
 Readers:
 Aliases that point at the table (ID, columns, filter, column sync):
 Owner creates the aliases again after the swap (yes / no aliases):
-Distinct days / months, min, max, nulls of the partition column:
+Distinct days / months, min, max, null_count of the partition column:
 Table IAM policy JSON:
 Row access policies (must be none):
 Search indexes (CREATE statements):
@@ -336,12 +336,12 @@ Owner who pauses the writers:
 
 ## 2. Choose granularity
 
-Use the `days`, `months` and `nulls` values of section 1. Rows with NULL in
-`COL` go to one more partition (`__NULL__`), and it counts toward the limit.
-So add 1 to both counts when `nulls` is above 0:
+Use the `days`, `months` and `null_count` values of section 1. Rows with NULL
+in `COL` go to one more partition (`__NULL__`), and it counts toward the
+limit. So add 1 to both counts when `null_count` is above 0:
 
-- `day_partitions` = `days`, plus 1 when `nulls` is above 0.
-- `month_partitions` = `months`, plus 1 when `nulls` is above 0.
+- `day_partitions` = `days`, plus 1 when `null_count` is above 0.
+- `month_partitions` = `months`, plus 1 when `null_count` is above 0.
 
 | Partitions | Granularity | Flag |
 |---|---|---|
@@ -445,7 +445,7 @@ Path B has two variants. Decide which one applies before 4a:
 The format string is an input from the owner. The default is `%Y-%m-%d`.
 
 ```bash
-kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT COUNTIF(COL IS NOT NULL AND SAFE.PARSE_DATE('%Y-%m-%d', COL) IS NULL) AS bad_values, COUNTIF(COL IS NULL) AS nulls, COUNT(*) AS total FROM T"
+kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT COUNTIF(COL IS NOT NULL AND SAFE.PARSE_DATE('%Y-%m-%d', COL) IS NULL) AS bad_values, COUNTIF(COL IS NULL) AS null_count, COUNT(*) AS total FROM T"
 kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT COL, COUNT(*) AS n FROM T WHERE COL IS NOT NULL AND SAFE.PARSE_DATE('%Y-%m-%d', COL) IS NULL GROUP BY COL ORDER BY n DESC LIMIT 20"
 ```
 
