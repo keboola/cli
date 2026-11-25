@@ -2,12 +2,8 @@
 
 Pure functions: no HTTP, no ConfigStore -- trivially unit-testable.
 
-The structural JSON Schema (Draft7) is NOT bundled. It is fetched at runtime
-from the stack's component registry (AI Service ``configurationSchema`` for
-``keboola.flow``) by the caller and passed into ``validate_conditional_flow``
-as an explicit parameter. When no schema is available (offline, fetch failure,
-empty schema) structural validation is skipped and only the semantic checks
-run -- this module never reaches the network itself.
+The caller supplies the stack's live JSON Schema (Draft7) when available.
+Local condition and semantic checks run even without a live schema.
 """
 
 from __future__ import annotations
@@ -16,55 +12,26 @@ from collections import deque
 from typing import Any
 
 from ..json_utils import draft7_errors
+from ._flow_conditions import transition_condition_errors
 from .flow_run_selection import first_phase_ids, normalize_id
 
-# Operand arity per operator (semantic; the schema cannot express these counts).
-_BINARY_OPERATORS = frozenset(
-    {"EQUALS", "NOT_EQUALS", "GREATER_THAN", "LESS_THAN", "INCLUDES", "CONTAINS"}
-)
-_VARIADIC_MIN1_OPERATORS = frozenset({"AND", "OR"})
-_PHASE_SCOPED_OPERATORS = frozenset({"ALL_TASKS_IN_PHASE", "ANY_TASKS_IN_PHASE"})
-_UNARY_FUNCTIONS = frozenset({"COUNT", "DATE"})
 
-
-def _structural_errors(
-    phases: list[dict[str, Any]], tasks: list[dict[str, Any]], schema: dict[str, Any]
-) -> list[str]:
-    """Run Draft7 validation against the supplied schema, collecting ALL errors."""
-    return draft7_errors({"phases": phases, "tasks": tasks}, schema)
-
-
-def _condition_arity_errors(condition: Any) -> list[str]:
-    """Recursively check operator/function operand arity."""
-    if not isinstance(condition, dict):
-        return []
-    errors: list[str] = []
-    ctype = condition.get("type")
-    operands = condition.get("operands", [])
-    if not isinstance(operands, list):
-        return [f"Condition 'operands' must be a list, got {type(operands).__name__}"]
-
-    for key in ("operator", "function"):
-        if key in condition and not isinstance(condition[key], str):
-            # An unhashable value would crash the set lookups below.
-            return [f"Condition '{key}' must be a string, got {type(condition[key]).__name__}"]
-
-    if ctype == "operator":
-        op = condition.get("operator")
-        if op in _BINARY_OPERATORS and len(operands) != 2:
-            errors.append(f"Operator '{op}' requires exactly 2 operands, got {len(operands)}")
-        elif op in _VARIADIC_MIN1_OPERATORS and len(operands) < 1:
-            errors.append(f"Operator '{op}' requires at least 1 operand, got {len(operands)}")
-        elif op in _PHASE_SCOPED_OPERATORS and not condition.get("phase"):
-            errors.append(f"Operator '{op}' requires a 'phase' field")
-    elif ctype == "function":
-        fn = condition.get("function")
-        if fn in _UNARY_FUNCTIONS and len(operands) != 1:
-            errors.append(f"Function '{fn}' requires exactly 1 operand, got {len(operands)}")
-
-    for child in operands:
-        errors.extend(_condition_arity_errors(child))
-    return errors
+def with_inferred_job_task_types(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Normalize implicit jobs on a copy, leaving explicitly typed tasks untouched."""
+    normalized = []
+    for task in tasks:
+        inner = task.get("task")
+        if (
+            isinstance(inner, dict)
+            and "type" not in inner
+            and ("componentId" in inner or "component_id" in inner)
+        ):
+            job = {**inner, "type": "job"}
+            if "component_id" in job:
+                job.setdefault("componentId", job.pop("component_id"))
+            task = {**task, "task": job}
+        normalized.append(task)
+    return normalized
 
 
 def _semantic_errors(phases: list[dict[str, Any]], tasks: list[dict[str, Any]]) -> list[str]:
@@ -139,13 +106,6 @@ def _semantic_errors(phases: list[dict[str, Any]], tasks: list[dict[str, Any]]) 
             f"found: {found}"
         )
 
-    # Condition operand arity (recursive).
-    for phase in phases:
-        for transition in phase.get("next", []):
-            cond = transition.get("condition")
-            if cond is not None:
-                errors.extend(_condition_arity_errors(cond))
-
     return errors
 
 
@@ -159,22 +119,20 @@ def validate_conditional_flow(
     ``find_unreachable_phases`` for that. NO cycle detection: goto loops are
     legal at runtime.
 
-    Structural (Draft7) validation runs ONLY when ``schema`` is supplied (the
-    schema is fetched at runtime from the stack by the caller -- this module is
-    pure). When the structure is unsound the structural errors are returned
-    first and the semantic checks are skipped, to avoid cascade noise from a
-    malformed document.
-
-    The semantic checks (unique ids, task.phase refs, goto refs,
-    default-transition rule, enabled-task-per-phase, operator/function arity)
-    ALWAYS run -- with or without a schema -- because the Storage API does not
-    validate flow configurations server-side.
+    Check the condition tree before Draft7 validation so malformed conditions
+    get specific hints instead of a generic union error. With no live schema,
+    local condition and semantic checks still validate the definition.
     """
     shape = _shape_errors(phases, tasks)
     if shape:
         return shape
+    condition_errors = transition_condition_errors(phases)
+    if condition_errors:
+        return condition_errors
     if schema:
-        structural = _structural_errors(phases, tasks, schema)
+        structural = draft7_errors(
+            {"phases": phases, "tasks": with_inferred_job_task_types(tasks)}, schema
+        )
         if structural:
             return structural
     if not phases:
@@ -202,14 +160,6 @@ def _shape_errors(phases: Any, tasks: Any) -> list[str]:
         nexts = phase.get("next", [])
         if not isinstance(nexts, list) or not all(isinstance(t, dict) for t in nexts):
             errors.append(f"Phase '{phase.get('id', '?')}': 'next' must be a list of objects")
-            continue
-        for transition in nexts:
-            condition = transition.get("condition")
-            if condition is not None and not isinstance(condition, dict):
-                errors.append(
-                    f"Phase '{phase.get('id', '?')}': a transition 'condition' must be an "
-                    f"object, got {type(condition).__name__}"
-                )
     # Ids the daemon compares as strings: a list, an object, a boolean or a
     # missing id cannot name a phase or a task.
     for kind, items, keys in (("Phase", phases, ("id",)), ("Task", tasks, ("id", "phase"))):

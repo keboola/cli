@@ -116,8 +116,8 @@ def validate(
     """Validate phases/tasks (schema + semantic checks). Mirrors `kbagent flow validate`.
 
     With ``project`` the live keboola.flow JSON Schema is fetched from the stack
-    for structural validation; a fetch failure degrades to semantic-only and is
-    recorded in ``notes``. Without ``project`` only semantic checks run.
+    for structural validation. Without a project or on a fetch failure, local
+    condition and semantic checks still run and the reason is recorded in ``notes``.
     """
     schema: dict[str, Any] | None = None
     notes: list[str] = []

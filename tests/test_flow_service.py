@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,6 +12,7 @@ from keboola_agent_cli.services.flow_service import (
     FLOW_COMPONENT_ID,
     FlowService,
     _parse_configuration,
+    get_bundled_flow_schema,
 )
 
 # ---------------------------------------------------------------------------
@@ -173,6 +175,27 @@ def test_create_flow_uses_keboola_flow_component():
     result = svc.create_flow(alias="prod", name="F", phases=phases, tasks=tasks)
     assert client.create_config.call_args.kwargs["component_id"] == "keboola.flow"
     assert result["id"] == "999"
+
+
+@pytest.mark.parametrize("component_key", ["componentId", "component_id"])
+def test_create_infers_job_type_without_mutating_definition(component_key: str) -> None:
+    client = MagicMock()
+    client.create_config.return_value = {"id": "999"}
+    svc = _make_flow_service(client, ai_client=_make_ai_client(get_bundled_flow_schema()))
+    phases, tasks = _valid_body()
+    tasks[0]["task"] = {component_key: "c", "configId": "1", "mode": "run", "extra": True}
+    original = deepcopy(tasks)
+    svc.create_flow(alias="prod", name="F", phases=phases, tasks=tasks)
+
+    assert tasks == original
+    inner = client.create_config.call_args.kwargs["configuration"]["tasks"][0]["task"]
+    assert inner == {
+        "type": "job",
+        "componentId": "c",
+        "configId": "1",
+        "mode": "run",
+        "extra": True,
+    }
 
 
 def test_create_flow_attaches_unreachable_warnings():
@@ -339,6 +362,48 @@ def test_update_flow_validates_merged_body():
     with pytest.raises(KeboolaApiError) as exc:
         svc.update_flow(alias="prod", config_id="5", tasks=bad_tasks)
     assert exc.value.error_code == ErrorCode.INVALID_FLOW_DEFINITION
+
+
+def test_update_normalizes_an_implicit_job_from_the_existing_definition() -> None:
+    client = MagicMock()
+    client.update_config.return_value = {"id": "5"}
+    svc = _make_flow_service(client, ai_client=_make_ai_client(get_bundled_flow_schema()))
+    phases, tasks = _valid_body()
+    del tasks[0]["task"]["type"]
+    expected = {**tasks[0]["task"], "type": "job"}
+    current = {"phases": phases, "tasks": tasks, "extra": True}
+    original = deepcopy(current)
+    client.get_config_detail.return_value = {"configuration": current}
+
+    svc.update_flow(alias="prod", config_id="5", phases=phases)
+
+    assert current == original
+    written = client.update_config.call_args.kwargs["configuration"]
+    assert written["tasks"][0]["task"] == expected
+    assert written["extra"] is True
+
+
+@pytest.mark.parametrize("operation", ["create", "update"])
+def test_bad_condition_hint_prevents_a_write(operation: str) -> None:
+    client = MagicMock()
+    svc = _make_flow_service(client, ai_client=_make_ai_client(get_bundled_flow_schema()))
+    phases, tasks = _valid_body()
+    phases[0]["next"].insert(
+        0, {"id": "bad", "goto": None, "condition": {"type": "operator", "operator": "BAD"}}
+    )
+    client.get_config_detail.return_value = {"configuration": {"phases": phases, "tasks": tasks}}
+    with pytest.raises(KeboolaApiError) as exc:
+        if operation == "create":
+            svc.create_flow(alias="prod", name="F", phases=phases, tasks=tasks)
+        else:
+            svc.update_flow(alias="prod", config_id="5", phases=phases)
+    assert exc.value.error_code == ErrorCode.INVALID_FLOW_DEFINITION
+    assert "phases[0].next[0].condition: invalid condition 'operator' operator 'BAD'" in str(
+        exc.value
+    )
+    assert "Allowed operators:" in str(exc.value)
+    client.create_config.assert_not_called()
+    client.update_config.assert_not_called()
 
 
 def test_update_flow_uses_keboola_flow_component():

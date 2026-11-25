@@ -410,6 +410,42 @@ class TestFlowValidate:
         assert result.exit_code == 0
         assert "structural schema validation skipped" in result.output
 
+    def test_validate_offline_reports_condition_path_in_json(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path)
+        definition = {
+            "phases": [
+                {
+                    "id": "p",
+                    "next": [
+                        {
+                            "goto": None,
+                            "condition": {
+                                "type": "operator",
+                                "operator": "AND",
+                                "operands": [
+                                    {"type": "operator", "operator": "NOPE", "operands": []}
+                                ],
+                            },
+                        },
+                        {"goto": None},
+                    ],
+                }
+            ],
+            "tasks": [{"id": "t", "phase": "p", "task": {"componentId": "c"}}],
+        }
+        result = _invoke(
+            store,
+            MagicMock(),
+            ["--json", "flow", "validate", "--definition", json.dumps(definition)],
+        )
+        assert result.exit_code == 2, result.output
+        data = json.loads(result.output)["data"]
+        assert data["valid"] is False
+        assert len(data["errors"]) == 1
+        assert data["errors"][0].startswith("phases[0].next[0].condition.operands[0]:")
+        assert "'NOPE'" in data["errors"][0]
+        assert "Allowed operators:" in data["errors"][0]
+
     def test_validate_invalid_exit_2(self, tmp_path: Path) -> None:
         bad = _VALID_FLOW_YAML.replace('phase: "p1"', 'phase: "ghost"')
         f = tmp_path / "bad.yaml"

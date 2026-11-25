@@ -7,6 +7,9 @@ the stack). These tests supply a compact representative Draft7 schema.
 
 from __future__ import annotations
 
+import pytest
+
+from keboola_agent_cli.services.flow_service import get_bundled_flow_schema
 from keboola_agent_cli.services.flow_validation import (
     find_unreachable_phases,
     validate_conditional_flow,
@@ -269,6 +272,64 @@ def test_function_count_requires_one_operand():
 def test_valid_equals_two_operands_ok():
     cond = {"type": "operator", "operator": "EQUALS", "operands": [_const("x"), _const("y")]}
     assert validate_conditional_flow(_phase_with_condition(cond), _tasks_two_phases()) == []
+
+
+@pytest.mark.parametrize("with_schema", [False, True])
+def test_each_invalid_condition_names_its_path(with_schema: bool) -> None:
+    phases = _phase_with_condition(
+        {
+            "type": "operator",
+            "operator": "AND",
+            "operands": [
+                {"type": "operator", "operator": "UNKNOWN", "operands": []},
+                {"type": ["bad"]},
+                {"type": "operator", "operator": "CONTINUE_ON_FAILURE", "tasks": [1]},
+                {"type": "task", "task": "a"},
+            ],
+        }
+    )
+    phases[1]["next"] = [
+        {"id": "bad", "goto": None, "condition": {"type": "operator", "operator": "ALSO_UNKNOWN"}},
+        {"id": "end", "goto": None},
+    ]
+    schema = get_bundled_flow_schema() if with_schema else None
+    errors = validate_conditional_flow(phases, _tasks_two_phases(), schema)
+    assert len(errors) == 5
+    path = "phases[0].next[0].condition.operands"
+    assert errors[0].startswith(f"{path}[0]:") and "'UNKNOWN'" in errors[0]
+    assert errors[1].startswith(f"{path}[1]:") and "unknown condition type" in errors[1]
+    assert errors[2].startswith(f"{path}[2]:") and "'tasks' must be a list of strings" in errors[2]
+    assert errors[3].startswith(f"{path}[3]:") and "'value' must be a string" in errors[3]
+    assert errors[4].startswith("phases[1].next[0].condition:") and "'ALSO_UNKNOWN'" in errors[4]
+    for error in errors:
+        assert "Allowed operators:" in error
+        assert "ANY_TASKS_IN_ANY_PHASE, CONTINUE_ON_FAILURE" in error
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        {"type": "operator", "operator": "CONTINUE_ON_FAILURE", "phase": "p1", "tasks": []},
+        {
+            "type": "operator",
+            "operator": "ANY_TASKS_IN_ANY_PHASE",
+            "operands": [
+                {
+                    "type": "operator",
+                    "operator": "EQUALS",
+                    "operands": [
+                        {"type": "task", "task": "*", "value": "status"},
+                        _const("success"),
+                    ],
+                }
+            ],
+        },
+    ],
+)
+def test_new_operators_validate_offline_and_against_bundled_schema(condition: dict) -> None:
+    phases, tasks = _phase_with_condition(condition), _tasks_two_phases()
+    assert validate_conditional_flow(phases, tasks) == []
+    assert validate_conditional_flow(phases, tasks, get_bundled_flow_schema()) == []
 
 
 # ── reachability (warning-level helper) ────────────────────────────────────

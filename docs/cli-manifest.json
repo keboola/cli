@@ -1737,11 +1737,11 @@
       "kind": "command",
       "hidden": false,
       "category": "read",
-      "help": "Validate a conditional-flow definition (schema + semantic checks).\n\nThe live keboola.flow JSON Schema is fetched from the stack of the project\n(``--project``, else the T1 chain) and structural validation runs alongside\nthe semantic checks; a fetch failure degrades gracefully (semantic-only + a\nwarning). When no project is registered or chosen, only the semantic checks\nrun and a note records that structural schema validation was skipped (no\nschema source).\n\nExit 0 when valid (warnings still printed), exit 2 when there are errors.",
+      "help": "Validate a conditional-flow definition (schema + semantic checks).\n\nThe live keboola.flow JSON Schema is fetched from the stack of the project\n(``--project``, else the T1 chain) and structural validation runs alongside\nthe local condition and semantic checks. On a fetch failure or when no\nproject is registered or chosen, the local checks still run and a note\nrecords that structural schema validation was skipped.\n\nExit 0 when valid (warnings still printed), exit 2 when there are errors.",
       "params": [
         {"kind": "option", "name": "definition", "opts": ["--definition"], "type": "text", "default": null, "help": "YAML/JSON flow definition to validate, inline."},
         {"kind": "option", "name": "definition_file", "opts": ["--definition-file"], "type": "path", "default": null, "help": "Read the YAML/JSON flow definition from a file (- for stdin)."},
-        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID whose stack gives the live JSON Schema (default: KBAGENT_PROJECT, then the active project, then the sole project; without any project, only the semantic checks run)"}
+        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID whose stack gives the live JSON Schema (default: KBAGENT_PROJECT, then the active project, then the sole project; without any project, only the local checks run)"}
       ]
     },
     {

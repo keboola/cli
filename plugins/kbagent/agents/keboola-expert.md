@@ -577,12 +577,12 @@ kbagent --json flow detail --project P --flow-id F > /tmp/flow-current.json
 
 # 3. Validate before pushing; loop until clean. Pass --project to fetch the
 #    LIVE schema from the stack for full structural + semantic validation
-#    (without --project only semantic checks run + a "skipped" note):
+#    (without a project, local checks run + a "skipped" note):
 kbagent --json flow validate --definition-file /tmp/merged.yaml --project P
 
 # 4. Apply. flow update fetches the live schema and validates on write
 #    (INVALID_FLOW_DEFINITION on a bad body; a schema-fetch failure degrades to
-#    semantic-only + a warning -- it never blocks the write):
+#    local checks + a warning):
 kbagent --json flow update --project P --flow-id F --definition-file /tmp/merged.yaml
 
 # 5. Fetch again and verify; execute the flow with:

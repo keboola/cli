@@ -5080,9 +5080,14 @@ CLI hides via its four-bucket response, but they matter when interpreting result
   transition. Tasks are typed (`job`/`notification`/`variable`).
 - **`INVALID_FLOW_DAG` was renamed to `INVALID_FLOW_DEFINITION`.**
   Update any code/string matching on the old error code.
+- **Condition errors are local and path-specific (since vNEXT).** Even without
+  a live schema, `flow validate`, `flow new`, and `flow update` reject invalid
+  condition nodes, name their paths, and list the allowed operators. An inner
+  task with `componentId` or `component_id` and no `type` is inferred as a
+  job, including when the task comes from the existing flow during an update.
 - **Validation:** `kbagent flow validate --definition-file flow.yaml [--project ALIAS]`.
   With `--project` it fetches the **live** JSON Schema from the stack and runs
-  full structural + semantic checks; without `--project` it runs semantic-only
+  full structural + local checks; without a project it runs local checks
   and adds a note that structural validation was skipped (no schema source).
   Exit 0 valid, exit 2 on errors. Use it in a tight loop before
   `flow new`/`flow update`.
@@ -5094,10 +5099,10 @@ CLI hides via its four-bucket response, but they matter when interpreting result
   `flow schema` is still the offline YAML template). *(updated 1.0.0)* without
   `--project` it uses the active project, and the bundled snapshot when no
   project is registered or chosen.
-- **Graceful semantic-only degradation.** If the live schema
+- **Graceful local-only validation.** If the live schema
   fetch fails (network error, or the AI Service returns no `configurationSchema`),
   `flow new`/`flow update`/`flow validate --project` do **not** block: structural
-  validation is skipped, the semantic checks still run (Storage does not validate
+  validation is skipped, the local checks still run (Storage does not validate
   flow configs server-side), and a `structural schema validation skipped: <reason>`
   warning/note is surfaced. A genuine `INVALID_FLOW_DEFINITION` still rejects the
   write.
