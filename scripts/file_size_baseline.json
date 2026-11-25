@@ -3,7 +3,7 @@
   "files": {
     "commands/config.py": 1868,
     "commands/storage.py": 1887,
-    "services/storage_service.py": 1664,
+    "services/storage_service.py": 1632,
     "services/sync_service.py": 1554
   }
 }

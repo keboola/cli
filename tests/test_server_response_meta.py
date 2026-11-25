@@ -473,6 +473,15 @@ def test_an_error_keeps_retryable_and_details(app: Any, api_client: MagicMock) -
     assert res.json()["error"]["details"] == {"a": 1}
 
 
+def test_a_type_on_an_untyped_table_is_an_invalid_argument(app: Any, api_client: MagicMock) -> None:
+    api_client.get_table_detail.return_value = {"id": TABLE, "isTyped": False}
+    res = _send(app, "POST", f"/storage/columns/prod/{TABLE}", {"params": {"column": "c:STRING"}})
+
+    assert res.status_code == http_status_for(ErrorCode.INVALID_ARGUMENT), res.text
+    assert res.json()["error"]["code"] == "INVALID_ARGUMENT"
+    api_client.add_column.assert_not_called()
+
+
 # --------------------------------------------------------------------------- #
 # V4: the HTTP status of every error code follows the error-code table
 # --------------------------------------------------------------------------- #
