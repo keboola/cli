@@ -89,7 +89,8 @@ an empty definition, mostly on untyped tables), or when `definition.columns`
 is not a list: `layout` then holds nulls and `policy_tags` is empty.
 
 Never print `definition.partitions`. It has one entry per physical partition
-and is unbounded.
+and is unbounded. Every other `storage table-detail` of this runbook drops
+it with `jq 'del(.data.definition.partitions)'`.
 
 Read from the result:
 
@@ -156,13 +157,25 @@ is the first object of this run in the project:
 
 ```bash
 kbagent --json workspace create --project ALIAS --name repartition-T \
-  | jq '{workspace_id: .data.workspace_id, gcp_project: (.data.user | fromjson | .project_id)}'
+  | jq 'if .data then {workspace_id: .data.workspace_id, gcp_project: (.data.user | fromjson | .project_id)} else {error} end'
 ```
 
 **Never run `workspace create` without this filter, and never print its
 response.** The response holds the key of the workspace service account
 (`data.user` is the key JSON, with `private_key`). The filter prints only
-`WS_ID` and `GCP_PROJECT`.
+`WS_ID` and `GCP_PROJECT`, or the error when the command failed.
+
+The same key is in the result of the `workspaceCreate` Storage job. When
+`workspace create` ends with `STORAGE_JOB_TIMEOUT`, never run `storage
+job-detail` on that job without a filter. Wait for it with:
+
+```bash
+kbagent --json storage job-detail --project ALIAS --job-id JOB_ID --wait | jq '.data | {status, error}'
+```
+
+Then find the workspace by its name with `workspace list --project ALIAS`,
+delete it, and run the filtered `workspace create` again: that is the only
+way to read `GCP_PROJECT` without printing the key.
 
 `workspace create` writes to the project, not to the table. It still waits
 for a yes.
@@ -610,6 +623,21 @@ moves the helper configuration to the trash. When the job fails, stop and
 run the abort step (section 4d), which drops the copy, this configuration
 and the helper workspace.
 
+A `job run --wait` that ends with exit 7 (`JOB_TIMEOUT_TERMINATED`) or exit
+4 (`QUEUE_JOB_TIMEOUT`) did not see the job end: after a timeout kbagent
+asks the queue to kill the job and waits only a few seconds. A job that is
+still ending can finish its output mapping after the copy was dropped, and
+create `B.T_repart` again without the layout and without the policy tags.
+So before section 4d, read the job until it is finished:
+
+```bash
+kbagent --json job detail --project ALIAS --job-id QUEUE_JOB_ID | jq '.data | {status, isFinished}'
+```
+
+`QUEUE_JOB_ID` is the ID of the transformation job (in the output or in the
+error details of `job run`). Start section 4d only when `isFinished` is
+true.
+
 kbagent has no command that imports a workspace table into a Storage table.
 That is why the fill goes through a transformation and its output mapping.
 
@@ -674,7 +702,7 @@ production table, and section 8 decides about it.
 With the owner's yes, in this order:
 
 ```bash
-kbagent --json storage table-detail --project ALIAS --table-id B.T_repart
+kbagent --json storage table-detail --project ALIAS --table-id B.T_repart | jq 'del(.data.definition.partitions)'
 kbagent --json storage delete-table --project ALIAS --table-id B.T_repart --dry-run
 kbagent --json storage delete-table --project ALIAS --table-id B.T_repart --yes
 kbagent --json config delete --project ALIAS --component-id keboola.google-bigquery-transformation --config-id CFG_ID
@@ -684,8 +712,12 @@ kbagent --json workspace delete --project ALIAS --workspace-id WS_ID --yes
 - The copy goes first: it is the object that holds data. After a failed
   path A copy the table may not exist: when `table-detail` answers
   `NOT_FOUND`, skip both `delete-table` commands.
-- `config delete` applies to path B only, and only when `CFG_ID` still
-  exists (the fill job failed, so section 4 did not delete it).
+- `config delete` applies to path B only, and only when `CFG_ID` exists:
+  skip it when the abort came before `transformation create` (the policy-tag
+  check on the empty table), and when section 4 already deleted the
+  configuration.
+- After a failed or timed-out fill job, the job is finished before this
+  step starts (section 4, "Fill the table with a transformation").
 - Read `B.T` once more with `storage table-detail` and confirm that it is
   unchanged: the layout and `rows_count` of section 1.
 - Tell the owner that the dropped copy stays reachable through BigQuery time
@@ -694,7 +726,7 @@ kbagent --json workspace delete --project ALIAS --workspace-id WS_ID --yes
 ## 5. Validate (refuse the swap on any mismatch)
 
 ```bash
-kbagent --json storage table-detail --project ALIAS --table-id B.T_repart
+kbagent --json storage table-detail --project ALIAS --table-id B.T_repart | jq 'del(.data.definition.partitions)'
 kbagent --json workspace load --project ALIAS --workspace-id WS_ID --table-id B.T --table-id B.T_repart --load-type view
 kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT (SELECT COUNT(*) FROM T) AS old_rows, (SELECT COUNT(*) FROM T_repart) AS new_rows"
 ```
@@ -827,7 +859,7 @@ section 3.
 ```bash
 kbagent --json storage swap-tables --project ALIAS --table-id B.T --target-table-id B.T_repart --branch 0 --dry-run
 kbagent --json storage swap-tables --project ALIAS --table-id B.T --target-table-id B.T_repart --branch 0 --yes --timeout 3600
-kbagent --json storage table-detail --project ALIAS --table-id B.T
+kbagent --json storage table-detail --project ALIAS --table-id B.T | jq 'del(.data.definition.partitions)'
 ```
 
 The dry run only echoes the pair of tables. It validates nothing: Storage
@@ -884,7 +916,7 @@ layout stayed:
 
 ```bash
 kbagent --json job list --project ALIAS --limit 20
-kbagent --json storage table-detail --project ALIAS --table-id B.T
+kbagent --json storage table-detail --project ALIAS --table-id B.T | jq 'del(.data.definition.partitions)'
 ```
 
 Watch the next read of each consumer too. For every reader recorded in
@@ -918,7 +950,7 @@ While `B.T_repart` exists, the rollback is a second swap. Before it:
 ```bash
 kbagent --json storage swap-tables --project ALIAS --table-id B.T --target-table-id B.T_repart --branch 0 --dry-run
 kbagent --json storage swap-tables --project ALIAS --table-id B.T --target-table-id B.T_repart --branch 0 --yes --timeout 3600
-kbagent --json storage table-detail --project ALIAS --table-id B.T
+kbagent --json storage table-detail --project ALIAS --table-id B.T | jq 'del(.data.definition.partitions)'
 ```
 
 After a rollback the original physical table is back at `B.T`, with its IAM
@@ -965,8 +997,8 @@ workspace: it replaces the two views there, so it waits for a yes like every
 other write.
 
 ```bash
-kbagent --json storage table-detail --project ALIAS --table-id B.T
-kbagent --json storage table-detail --project ALIAS --table-id B.T_repart
+kbagent --json storage table-detail --project ALIAS --table-id B.T | jq 'del(.data.definition.partitions)'
+kbagent --json storage table-detail --project ALIAS --table-id B.T_repart | jq 'del(.data.definition.partitions)'
 kbagent --json workspace load --project ALIAS --workspace-id WS_ID --table-id B.T --table-id B.T_repart --load-type view
 kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT (SELECT COUNT(*) FROM T) AS rows_at_t, (SELECT COUNT(*) FROM T_repart) AS rows_at_t_repart"
 ```
