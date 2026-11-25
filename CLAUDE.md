@@ -1090,7 +1090,7 @@ kbagent branch metadata-delete [--project NAME] --metadata-id ID [--branch ID|de
 #   command except list/create takes `[--merge-request-id N] [--branch B]` (1.0.0 removed `--id`): omitted, the target is
 #   the merge request OF the active branch (`branch use`) -- a branch has at most one MR, ever. Both flags at
 #   once -> exit 2. `--project` is single-project (never fans out). Status is the DERIVED state the web UI
-#   shows (in_development|in_review|approved|in_merge|merged|closed|rejected), never the raw one.
+#   shows (in_development|in_review|approved|in_merge|merged|closed|rejected, or `unknown` for a state kbagent does not know), never the raw one.
 kbagent merge-request list [--project A] [--state STATE]   # derived (in_development|in_review|approved|in_merge|merged|closed|rejected) or raw (development|published|canceled) states; `--help` lists them
 kbagent merge-request detail [--project A] [--merge-request-id N | --branch B] [--activity-log]
 kbagent merge-request create --title T [--project A] [--branch B] [--description D] [--reviewer-id ID ...] [--external-id X]
@@ -1138,7 +1138,10 @@ kbagent merge-request resolve --component-id C --config-id I (--take ours|theirs
 #   MR_NOT_READY_TO_MERGE, `merge` reads the MR: state `published` (an earlier call merged it) answers
 #   status "already_merged", exit 0; state `in_merge` (a merge job still runs) answers
 #   MR_MERGE_RUNNING (exit 4, conflict, retryable false, `details.state`; was MR_NOT_READY_TO_MERGE,
-#   exit 1): no second merge started, no local cleanup -- poll `detail`, do not merge again. The four state-change PUTs are never repeated by the HTTP layer.
+#   exit 1): no second merge started, no local cleanup -- poll `detail`, do not merge again.
+#   A merge call with an unclear outcome (5xx, read/write timeout, lost connection) is read back the same way
+#   (published -> already_merged; else the original error, retryable false, `details.outcome_unknown`). A 409
+#   without a code and conflicts is decided by the live conflicts list. The four state-change PUTs are never repeated by the HTTP layer.
 #   Version gate lives in gotchas.md. A truncated conflict
 #   list in the error carries `details.api_error_params_truncated: true` -- run `conflicts` for the full set.
 #   `merge` blocks for up to 10 minutes (no --wait/--timeout). Every result may carry `warnings[]`

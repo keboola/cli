@@ -224,8 +224,8 @@ A command that fails with an error code exits with the code's `Exit` value below
 | Code | Exit | Type | Description |
 |---|---|---|---|
 | `MR_NOT_READY_TO_MERGE` | 1 | `conflict` | Merge answered 409 with `storage.mergeRequests.notReadyToMerge`: a project merge lock is held, the MR is in a state that cannot merge, or another MR in the project is already processing. Transient -- retryable |
-| `MR_MERGE_CONFLICT` | 1 | `conflict` | Merge answered 409 with `storage.mergeRequests.validation` (or, on older stacks, no code): configurations changed on both branches; `details.api_error_params.errors` lists them. Not retryable -- resolve the conflicts and merge again |
-| `MR_MERGE_RUNNING` | 4 | `conflict` | Merge answered the not-ready 409 and the re-read merge request is `in_merge`: a merge started earlier (lost response, a concurrent call, the auto-merge scheduler) is still running. Not a refusal and not a success: no second merge was started and no local cleanup ran. `details.state` / `derived_state`. Not retryable -- do not merge again; poll `merge-request detail` until `merged` (or `approved` if the merge failed) |
+| `MR_MERGE_CONFLICT` | 1 | `conflict` | Merge answered 409 with `storage.mergeRequests.validation` (or no code, when the body or the live conflicts list names conflicts or that list cannot be read; a code-less 409 without any is `MR_NOT_READY_TO_MERGE`): configurations changed on both branches; `details.api_error_params.errors` lists them. Not retryable -- resolve the conflicts and merge again |
+| `MR_MERGE_RUNNING` | 4 | `conflict` | The re-read merge request is `in_merge` after a not-ready 409 (a merge started earlier: lost response, a concurrent call, the auto-merge scheduler) or after a merge call whose outcome is unclear (5xx, read/write timeout, connection lost after sending; this call may have started it). Not a refusal and not a success: the merge PUT is never repeated and no local cleanup ran. `details.state` / `derived_state`. Not retryable -- do not merge again; poll `merge-request detail` until `merged` (or `approved` if the merge failed) |
 
 ### Updates
 

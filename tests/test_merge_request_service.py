@@ -86,8 +86,8 @@ class TestDeriveState:
         )
         assert derive_state(mr) == "rejected"
 
-    def test_unknown_raw_state_passes_through(self) -> None:
-        assert derive_state(_mr("some_future_state")) == "some_future_state"
+    def test_unknown_raw_state_is_unknown(self) -> None:
+        assert derive_state(_mr("some_future_state")) == "unknown"
 
     def test_server_field_wins_over_local_derivation(self) -> None:
         # Polyfill contract: once DMD-1988 serializes derivedState, the local
