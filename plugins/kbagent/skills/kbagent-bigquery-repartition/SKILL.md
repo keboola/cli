@@ -64,6 +64,7 @@ Classify the table before anything else. The class decides the path.
 | Cluster only | The table needs clustering columns and no partitioning change. | In place with `kbagent storage clustering-set` (runbook section 4C). Copy and swap (runbook section 4, path A, without the partitioning flags) only when the owner wants the existing rows reclustered at once. |
 | Partition, column ready | The partition column is DATE, DATETIME or TIMESTAMP. | Copy path (runbook section 4, path A). |
 | Partition, column not ready | The date is held in a STRING column, or the table is untyped. | Type-change path (runbook section 4, path B). |
+| Any class, with a column default | At least one column has a default, whatever the partition column is. | Runbook section 4, path B: the copy path cannot set a default. Without a type change when the partition column is ready or the table is cluster only. A cluster-only table converted in place (section 4C) is not copied and keeps its defaults, so this row does not apply to it. |
 | No key | No partition column and no clustering column is confirmed. | Stop. Ask the table owner. |
 
 ## How to run this

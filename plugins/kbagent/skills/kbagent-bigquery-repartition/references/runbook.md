@@ -92,8 +92,13 @@ Read from the result:
   On an untyped table every column is STRING, so an untyped table is path B.
 - `column_details[].nullable`: whether each column accepts NULL. Record it
   per column. Section 5 compares it with the copy.
+- `column_details[].length`: the length of a column type, where it has one
+  (`100` of STRING(100), `38,9` of NUMERIC(38,9)). Record it per column.
+  Path B passes it to the copy, and section 5 compares it.
   A table that has any `column_details[].default` is path B as well, whatever
-  the type of `COL` is (section 4, path A, "Column defaults").
+  the type of `COL` is (section 4, path A, "Column defaults"). When `COL` is
+  already DATE, DATETIME or TIMESTAMP, or the table is cluster only, it takes
+  path B **without a type change** (section 4, path B).
 - `definition.timePartitioning`, `rangePartitioning`, `clustering`: the
   current layout.
 - `definition.requirePartitionFilter`. Refuse the table when it is true. Every
@@ -229,8 +234,9 @@ Refuse the table, and change nothing, when one of these holds:
 - The operator cannot apply the recorded IAM bindings to the copy.
 - The copy was created without a policy tag that the source has (section 4c).
 - No partition column and no clustering column is confirmed.
-- `data_size_bytes` is over 5 TiB and the owner has not decided on the ranged
-  transformation. Stop and hand the table to the owner.
+- `data_size_bytes` is over 5 TiB (5,497,558,138,880 bytes). This version
+  does not convert such a table: it has no procedure that copies a table in
+  ranges. Hand the table to the owner.
 
 Nothing above this line created anything in the project, so a table that is
 refused here leaves nothing behind.
@@ -286,6 +292,7 @@ primary_key:
 last_import_date:
 Columns and types:
 Nullable per column (column_details[].nullable):
+Length per column (column_details[].length):
 Current layout (timePartitioning / rangePartitioning / clustering):
 requirePartitionFilter (must be false):
 Column defaults (column_details[].default):
@@ -310,13 +317,18 @@ Owner who pauses the writers:
 
 ## 2. Choose granularity
 
-Use the `days` and `months` values of section 1.
+Use the `days`, `months` and `nulls` values of section 1. Rows with NULL in
+`COL` go to one more partition (`__NULL__`), and it counts toward the limit.
+So add 1 to both counts when `nulls` is above 0:
 
-| Distinct values | Granularity | Flag |
+- `day_partitions` = `days`, plus 1 when `nulls` is above 0.
+- `month_partitions` = `months`, plus 1 when `nulls` is above 0.
+
+| Partitions | Granularity | Flag |
 |---|---|---|
-| At most 4,000 days | DAY | `--time-partitioning-type DAY` |
-| More than 4,000 days | MONTH | `--time-partitioning-type MONTH` |
-| More than 4,000 months | Stop. Ask the owner. | |
+| `day_partitions` at most 4,000 | DAY | `--time-partitioning-type DAY` |
+| `day_partitions` over 4,000, `month_partitions` at most 4,000 | MONTH | `--time-partitioning-type MONTH` |
+| `month_partitions` over 4,000 | Stop. Ask the owner. | |
 
 On that stop, delete the helper workspace (the `workspace delete` command of
 section 1). No other object exists yet.
@@ -377,7 +389,9 @@ The class of the table is "Cluster only" ([../SKILL.md](../SKILL.md)).
 **What it does not need.** There is no copy, no swap and no old table to keep
 for 7 days. The writers are not paused. The table keeps its ID and its data,
 so its IAM bindings, row access policies, search indexes, policy tags and
-aliases stay on the same table. No `bq` step is needed.
+aliases stay on the same table. No `bq` step is needed. The column defaults
+stay too, so a table with a column default does not need path B here, and the
+5 TiB limit of section 1 does not apply: no data is copied.
 
 **Trade-off.** BigQuery clusters the data that is written after the change.
 The rows that are already in the table keep their order until they are
@@ -501,11 +515,24 @@ never re-run the copy:
 kbagent --json storage job-detail --project ALIAS --job-id JOB_ID --wait --timeout 3600
 ```
 
+When the copy ends in any other error, or the job that you waited for ends
+with `STORAGE_JOB_FAILED`: stop, and never re-run the copy. Run the abort
+step (section 4d). It reads whether `B.T_repart` exists, drops it when it
+does, and deletes the helper workspace. A new attempt starts again at
+section 1.
+
 Record the duration of the copy from the job times.
 
-### Path B: type change (the date is a STRING, or the table is untyped)
+### Path B: typed empty table filled by a transformation
 
-#### 4a. Profile the column
+Path B has two variants. Decide which one applies before 4a:
+
+| Variant | When | What differs |
+|---|---|---|
+| With a type change | `COL` is a STRING, or the table is untyped. | 4a runs. In 4b `COL` becomes `DATE`. The fill parses `COL`. |
+| Without a type change | The table is here only because of a column default: `COL` is already DATE, DATETIME or TIMESTAMP, or the table is cluster only. | Skip 4a. In 4b every column, `COL` included, keeps its type. The fill selects every column unchanged. |
+
+#### 4a. Profile the column (variant with a type change only)
 
 The format string is an input from the owner. The default is `%Y-%m-%d`.
 
@@ -520,8 +547,13 @@ query to the owner. No table is created. Delete the helper workspace (the
 
 #### 4b. Create the empty typed table with the layout
 
-Every column keeps its type from `column_details`. On an untyped table every
-column is `STRING`. `COL` becomes `DATE`. NOT NULL and the primary key are the
+Every column keeps its type from `column_details`, with its length: a column
+recorded with a `length` in section 1 is passed as `--column NAME:TYPE(length)`,
+for example `--column NAME:STRING(100)` or `--column AMOUNT:NUMERIC(38,9)`. A
+bare `--column NAME:STRING` creates the column without the length limit of the
+source. On an untyped table every column is `STRING`. With a type change `COL`
+becomes `DATE`; without one it keeps its type and length like every other
+column, and a cluster-only table gets no `--time-partitioning-*` flags. NOT NULL and the primary key are the
 same as on the source: pass one `--not-null-column` for every column recorded
 with `nullable: false` in section 1. Every column default recorded in section 1
 (`column_details[].default`) is repeated with `--default name=value`: the copy
@@ -530,7 +562,7 @@ insert that omits it, or fails its NOT NULL constraint.
 
 ```bash
 kbagent --json storage create-table --project ALIAS --bucket-id B --name T_repart \
-  --column PK:STRING --column COL:DATE --column C1:STRING --column OTHER:STRING \
+  --column "PK:STRING(64)" --column COL:DATE --column C1:STRING --column OTHER:STRING \
   --primary-key PK --not-null-column PK --default OTHER=0 \
   --time-partitioning-type DAY --time-partitioning-field COL --clustering-field C1
 ```
@@ -565,6 +597,9 @@ order, as `--primary-key` of section 4b. An output mapping whose key differs
 from the key of the destination table does not load as it is. Omit
 `primary_key` only when the table has no primary key.
 
+Without a type change the SELECT lists every column unchanged, `COL`
+included: `CREATE TABLE T_repart AS SELECT PK, COL, C1, OTHER FROM T`.
+
 The column list in the SELECT is the full column list of the source, in the
 order of the source. Run `config delete` only after a successful job: it
 moves the helper configuration to the trash. When the job fails, stop and
@@ -574,8 +609,9 @@ and the helper workspace.
 kbagent has no command that imports a workspace table into a Storage table.
 That is why the fill goes through a transformation and its output mapping.
 
-After the swap the owner changes the writers of `B.T`, so that they write a
-DATE into `COL`. The runbook does not change them.
+With a type change, after the swap the owner changes the writers of `B.T`,
+so that they write a DATE into `COL`. The runbook does not change them.
+Without a type change the writers stay as they are.
 
 ## 4c. Secure the copy before the swap (a person with BigQuery access)
 
@@ -621,8 +657,8 @@ step (section 4d), and refuse the table.
 
 ## 4d. Abort before the swap
 
-Every stop between the copy and the swap ends here: a failed path B job, a
-missing policy tag (section 4b or 4c), a step of section 4c that cannot be
+Every stop between the copy and the swap ends here: a failed path A copy, a
+failed path B job, a missing policy tag (section 4b or 4c), a step of section 4c that cannot be
 done, a failed check of section 5. Until this step runs, `B.T_repart` is a
 full second copy of the data, personal data included, possibly without its
 policy tags, and readable by every dataset reader.
@@ -633,13 +669,16 @@ production table, and section 8 decides about it.
 With the owner's yes, in this order:
 
 ```bash
+kbagent --json storage table-detail --project ALIAS --table-id B.T_repart
 kbagent --json storage delete-table --project ALIAS --table-id B.T_repart --dry-run
 kbagent --json storage delete-table --project ALIAS --table-id B.T_repart --yes
 kbagent --json config delete --project ALIAS --component-id keboola.google-bigquery-transformation --config-id CFG_ID
 kbagent --json workspace delete --project ALIAS --workspace-id WS_ID --yes
 ```
 
-- The copy goes first: it is the object that holds data.
+- The copy goes first: it is the object that holds data. After a failed
+  path A copy the table may not exist: when `table-detail` answers
+  `NOT_FOUND`, skip both `delete-table` commands.
 - `config delete` applies to path B only, and only when `CFG_ID` still
   exists (the fill job failed, so section 4 did not delete it).
 - Read `B.T` once more with `storage table-detail` and confirm that it is
@@ -662,8 +701,13 @@ helper workspace.
 - **Row count.** `old_rows` equals `new_rows`, and both equal the row count
   recorded right before the copy (section 3). A difference means that a
   write landed.
-- **Columns and types.** The column list and the types are equal. Path B:
-  only `COL` differs, and it is `DATE`.
+- **Columns and types.** The column list and the types are equal. Path B
+  with a type change: only `COL` differs, and it is `DATE`. Path B without a
+  type change: no column differs.
+- **Length.** `column_details[].length` of each column equals the value
+  recorded for `B.T` in section 1. A column that has a length on one table
+  and none, or another one, on the other table is a mismatch. Path B with a
+  type change: `COL` is left out, because its type changes.
 - **Nullability.** `column_details[].nullable` of each column equals the
   value recorded for `B.T` in section 1. A column that is NOT NULL on one
   table and nullable on the other is a mismatch: after the swap the table
@@ -686,10 +730,9 @@ kbagent cannot read IAM bindings. The operator reads them on the copy:
 bq --project_id=GCP_PROJECT get-iam-policy --format=prettyjson DATASET.T_repart
 ```
 
-Tables over 5 TiB, and every path B table, also get a row count per
-partition. A cluster-only table that was copied has no partitions and skips
-it. A cluster-only table converted in place skips sections 4c to 10
-(section 4C).
+Every path B table also gets a row count per partition. A cluster-only table
+that was copied has no partitions and skips it. A cluster-only table converted
+in place skips sections 4c to 10 (section 4C).
 
 ```bash
 kbagent --json workspace query --project ALIAS --workspace-id WS_ID --full --sql "SELECT p, SUM(old_c) AS old_rows, SUM(new_c) AS new_rows FROM (SELECT PART_OLD AS p, COUNT(*) AS old_c, 0 AS new_c FROM T GROUP BY p UNION ALL SELECT PART_NEW AS p, 0 AS old_c, COUNT(*) AS new_c FROM T_repart GROUP BY p) GROUP BY p HAVING SUM(old_c) != SUM(new_c)"
@@ -709,9 +752,10 @@ that table:
 
 - Path A: `COL` has the same type on both tables, so `PART_OLD` and
   `PART_NEW` are the same expression.
-- Path B: on the old table `COL` is a STRING, so `PART_OLD` uses
-  `SAFE.PARSE_DATE` with the format string of section 4a. On the new table
-  `COL` is a DATE, so `PART_NEW` uses `COL`.
+- Path B with a type change: on the old table `COL` is a STRING, so
+  `PART_OLD` uses `SAFE.PARSE_DATE` with the format string of section 4a. On
+  the new table `COL` is a DATE, so `PART_NEW` uses `COL`.
+- Path B without a type change: as on path A, both are the same expression.
 
 Rows with NULL in `COL` form one group with `p` NULL on each table, and the
 query compares the two groups like any other partition. An empty result
@@ -863,7 +907,7 @@ After a rollback the original physical table is back at `B.T`, with its IAM
 bindings. The aliases that the owner created again after the first swap now
 read `B.T_repart`: the owner deletes them and creates them again on `B.T`
 (section 6, step 4). A person creates the search indexes again
-(section 6, step 3). After a path B rollback the owner also reverts the
+(section 6, step 3). After a rollback of path B with a type change the owner also reverts the
 writers to STRING.
 
 Time travel of the new table starts at the copy. A restore to an earlier
