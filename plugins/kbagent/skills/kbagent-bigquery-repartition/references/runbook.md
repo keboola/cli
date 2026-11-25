@@ -878,8 +878,11 @@ A table that never received streaming writes skips the first two checks.
 
 ### Before the swap: outside the consumers' schedule
 
-The swap is a chain of renames, so for a moment no table exists under the
-name `T`. A reader that runs in that moment fails. This also holds for a
+The swap is a chain of renames: Storage drops the primary key constraints
+of both tables, renames `T` to a temporary name (`__kbc_swap_tmp_` plus a
+random suffix), `T_repart` to `T` and the temporary table to `T_repart`, and
+adds the primary keys back. So for a moment no table exists under the name
+`T`. A reader that runs in that moment fails. This also holds for a
 reader in a project that links the bucket. Run the swap at a time when no
 reader recorded in section 1 is scheduled, and agree on that time with the
 owner. Check that no reader runs now with the `job list` command of
@@ -1043,6 +1046,21 @@ kbagent --json workspace load --project ALIAS --workspace-id WS_ID --table-id B.
 kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT (SELECT COUNT(*) FROM T) AS rows_at_t, (SELECT COUNT(*) FROM T_repart) AS rows_at_t_repart"
 ```
 
+The swap renames through a temporary table and adds the primary keys back
+at its end (section 6). A swap that failed half way can leave a table under
+the temporary name, and a table without its primary key constraint. The
+operator reads both:
+
+```bash
+bq --project_id=GCP_PROJECT ls --max_results=10000 --format=prettyjson DATASET | jq -r '.[].tableReference.tableId' | grep '^__kbc_swap_tmp_'
+bq --project_id=GCP_PROJECT show --format=prettyjson DATASET.T | jq '.tableConstraints.primaryKey'
+bq --project_id=GCP_PROJECT show --format=prettyjson DATASET.T_repart | jq '.tableConstraints.primaryKey'
+```
+
+The first command must print nothing. When it prints a table, or when `T`
+or `T_repart` does not exist, do not run `workspace load`: it fails on the
+missing table. Hand the evidence to the Connection maintainers as it is.
+
 Compare, for both tables, the physical state with the Storage rows:
 
 | Physical state | Storage row |
@@ -1050,7 +1068,12 @@ Compare, for both tables, the physical state with the Storage rows:
 | Row count of the query above | `rows_count` |
 | Column list (`INFORMATION_SCHEMA.COLUMNS` of the dataset, or `bq show`) | `column_details` |
 | Partitioning and clustering (`bq show`) | `definition` layout |
-| | descriptions, `primary_key` |
+| Primary key constraint (`tableConstraints.primaryKey` of `bq show`) | `primary_key` |
+| | descriptions |
+
+On path A and on path B without a type change both tables have the same
+columns, so only the row count and the layout can show a half-moved swap.
+With a type change the type of `COL` differs too.
 
 kbagent has no bucket refresh and no other command that repairs the metadata
 of a half-moved swap. Hand the evidence to the Connection maintainers
