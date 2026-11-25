@@ -1048,6 +1048,8 @@ class TestFullE2E:
         updated = self._run_ok(*set_args)["data"]
         assert updated["status"] == "updated"
         assert updated["job_id"] is not None
+        assert "result" not in updated
+        assert isinstance(updated["branch_id"], int)
         assert (clustering() or {}).get("fields") == ["id", "value"]
 
         repeated = self._run_ok(*set_args)["data"]

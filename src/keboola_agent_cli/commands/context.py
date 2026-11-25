@@ -2150,7 +2150,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Change the clustering of a typed BigQuery table IN PLACE (no copy, no swap): --clustering-field
     COL (repeatable, 1 to 4, order matters) replaces it, --clear removes it. Waits for the job,
     then reads `table-detail`; the result has `status` updated | unchanged (unchanged = the table
-    already has that clustering, nothing written), `clustering_before`, `clustering`, `job_id`.
+    already has that clustering, nothing written), `table_id`, `branch_id` (the branch used; the
+    default branch ID for production), `clustering_before`, `clustering`, `job_id`, and `warnings`
+    only when present. The Storage job result is not passed through.
     Storage's 422 `storage.tables.clusteringUpdateNotAllowed` (not BigQuery, alias, external
     bucket, unknown column, more than 4 fields) is INVALID_ARGUMENT, exit 2, with
     `details.api_error_code`. BigQuery clusters data written after the change; existing rows keep

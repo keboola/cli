@@ -4250,6 +4250,10 @@ type inventory and examples.
   bucket, more than 4 fields, a field twice or an unknown column with
   `storage.tables.clusteringUpdateNotAllowed`; kbagent reports `INVALID_ARGUMENT`,
   exit 2, with that code in `details.api_error_code`.
+- **Small result.** The result has `table_id`, `branch_id`, `clustering_before`,
+  `clustering`, `status`, `job_id` and, only when present, `warnings`. `branch_id` is
+  the branch used, the default branch ID for production (null only when the branch
+  list could not be read). The Storage job result is not passed through.
 - **A timeout does not cancel the job.** `STORAGE_JOB_TIMEOUT`, exit 4,
   `retryable: false`, `details.job_id`; the message names `storage job-detail --wait`
   and `storage table-detail`. Following the job is safe.
