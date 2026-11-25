@@ -1138,15 +1138,19 @@ class TestUnloadTableCli:
     """Tests for `kbagent storage unload-table` command."""
 
     @pytest.mark.parametrize(
-        ("compression_args", "form_body"),
+        ("export_args", "form_body"),
         [
-            ([], b"fileType=parquet"),
-            (["--compression", "none"], b"fileType=parquet"),
-            (["--compression", "snappy"], b"fileType=parquet&gzip=true"),
+            ([], b"fileType=csv"),
+            (["--file-type", "parquet"], b"fileType=parquet&gzip=true"),
+            (["--file-type", "parquet", "--compression", "none"], b"fileType=parquet"),
+            (
+                ["--file-type", "parquet", "--compression", "snappy"],
+                b"fileType=parquet&gzip=true",
+            ),
         ],
     )
-    def test_parquet_compression_request(
-        self, tmp_path: Path, httpx_mock, compression_args: list[str], form_body: bytes
+    def test_export_compression_request(
+        self, tmp_path: Path, httpx_mock, export_args: list[str], form_body: bytes
     ) -> None:
         store = _make_store(tmp_path)
         httpx_mock.add_response(
@@ -1159,7 +1163,7 @@ class TestUnloadTableCli:
         httpx_mock.add_response(
             method="GET",
             url="https://connection.keboola.com/v2/storage/files/12345?federationToken=1",
-            json={**SAMPLE_FILE, "name": "users.parquet", "isSliced": True},
+            json=SAMPLE_FILE,
         )
         with patch("keboola_agent_cli.cli.ConfigStore", return_value=store):
             result = runner.invoke(
@@ -1172,9 +1176,7 @@ class TestUnloadTableCli:
                     "test",
                     "--table-id",
                     "in.c-data.users",
-                    "--file-type",
-                    "parquet",
-                    *compression_args,
+                    *export_args,
                 ],
             )
 
@@ -1185,7 +1187,7 @@ class TestUnloadTableCli:
         ("file_type", "compression", "message"),
         [
             ("csv", "snappy", "--compression snappy requires --file-type parquet"),
-            ("parquet", "zstd", "--compression must be 'none' or 'snappy', got 'zstd'"),
+            ("parquet", "zstd", "Invalid value for '--compression'"),
         ],
     )
     def test_invalid_compression(self, file_type: str, compression: str, message: str) -> None:
@@ -1209,7 +1211,7 @@ class TestUnloadTableCli:
         assert result.exit_code == 2
         error = json.loads(result.output)["error"]
         assert error["code"] == "INVALID_ARGUMENT"
-        assert error["message"] == message
+        assert message in error["message"]
 
     def test_unload_json(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -1437,7 +1439,7 @@ class TestUnloadTableToFileBranchService:
             limit=None,
             branch_id=33,
             file_type="csv",
-            compression="none",
+            compression=None,
         )
         mock_client.tag_file.assert_called_once_with(99, "export", branch_id=33)
         mock_client.get_file_info.assert_called_once_with(99, branch_id=33)

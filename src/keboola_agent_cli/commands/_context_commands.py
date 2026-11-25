@@ -1347,7 +1347,7 @@ Browse and manage storage buckets, tables, and files
   kbagent storage unload-table [--project PROJECT] --table-id ID
       [--column COLUMN ...] [--limit N] [--tag TAG ...] [--download]
       [--output OUTPUT] [--branch N] [--file-type TYPE]
-      [--compression COMPRESSION] [--keep-slices] [--progress]
+      [--compression none|snappy] [--keep-slices] [--progress]
     Export a table to a Storage File.
 
   kbagent storage upload-table [--project PROJECT] --table-id ID --file PATH

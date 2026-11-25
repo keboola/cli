@@ -2207,7 +2207,7 @@ class StorageService(ColumnDescriptionsMixin):
         keep_slices: bool = False,
         on_progress: DownloadProgress | None = None,
         *,
-        compression: str = "none",
+        compression: str | None = None,
     ) -> dict[str, Any]:
         """Export a table to a Storage File.
 
@@ -2227,7 +2227,8 @@ class StorageService(ColumnDescriptionsMixin):
                 local downloads save the slices as separate files.
             keep_slices: Save sliced CSV downloads as separate files.
             on_progress: As for :meth:`download_table` (only with ``download``).
-            compression: "none" (default) or "snappy" (Parquet only).
+            compression: "none" or "snappy" (Parquet only). If omitted,
+                defaults to Snappy for Parquet and no compression for CSV.
 
         Returns:
             Dict with export metadata and file info.

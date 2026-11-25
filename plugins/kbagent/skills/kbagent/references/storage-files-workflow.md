@@ -134,8 +134,8 @@ kbagent --json storage unload-table \
 `unload-table --file-type parquet` produces a sliced Apache Parquet file in Storage Files.
 This avoids the CSV round-trip for analytics data, preserves Keboola's typed backend
 output, and is directly consumable by pyarrow, Spark, DuckDB and other Parquet readers.
-Parquet is uncompressed by default. Use `--compression snappy` (since vNEXT)
-to compress the Parquet data in Storage, including slices downloaded with `--download`.
+Parquet uses Snappy compression by default (since vNEXT). Use `--compression none`
+for uncompressed Parquet. Slices keep their compression when downloaded with `--download`.
 
 ```bash
 # Export as Parquet (stays in Keboola)

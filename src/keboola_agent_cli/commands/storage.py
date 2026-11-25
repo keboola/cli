@@ -5,6 +5,7 @@ Provides direct Storage API access including sharing/linked bucket metadata
 """
 
 from contextlib import nullcontext
+from enum import StrEnum
 from pathlib import Path
 
 import typer
@@ -54,6 +55,12 @@ storage_app = typer.Typer(help="Browse and manage storage buckets, tables, and f
 _BUCKETS = "Buckets"
 _TABLES = "Tables"
 _FILES = "Files"
+
+
+class _ParquetCompression(StrEnum):
+    NONE = "none"
+    SNAPPY = "snappy"
+
 
 # Surfaced in human mode whenever a branch-aware write completes against a
 # project lacking the `storage-branches` feature. The transformation runner
@@ -2093,10 +2100,10 @@ def storage_unload_table(
         "always sliced; with --download each slice is saved as its own file "
         "under --output (treated as a directory).",
     ),
-    compression: str = typer.Option(
-        "none",
+    compression: _ParquetCompression | None = typer.Option(
+        None,
         "--compression",
-        help="Parquet compression: 'none' (default) or 'snappy'. "
+        help="Compression defaults to 'snappy' for Parquet and 'none' for CSV. "
         "Snappy requires --file-type parquet.",
     ),
     keep_slices: bool = typer.Option(
@@ -2130,13 +2137,7 @@ def storage_unload_table(
         )
         raise typer.Exit(code=2) from None
     formatter = get_formatter(ctx)
-    if compression not in ("none", "snappy"):
-        formatter.error(
-            message=f"--compression must be 'none' or 'snappy', got {compression!r}",
-            error_code=ErrorCode.INVALID_ARGUMENT,
-        )
-        raise typer.Exit(code=2) from None
-    if compression == "snappy" and file_type != "parquet":
+    if compression == _ParquetCompression.SNAPPY and file_type != "parquet":
         formatter.error(
             message="--compression snappy requires --file-type parquet",
             error_code=ErrorCode.INVALID_ARGUMENT,
@@ -2174,7 +2175,7 @@ def storage_unload_table(
                 branch_id=effective_branch,
                 file_type=file_type,
                 keep_slices=keep_slices,
-                compression=compression,
+                compression=compression.value if compression is not None else None,
                 on_progress=on_progress,
             )
     except ConfigError as exc:
