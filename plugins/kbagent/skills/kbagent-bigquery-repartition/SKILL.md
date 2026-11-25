@@ -5,12 +5,13 @@ description: >
   partitioned and/or clustered layout. Covers: the copy into a new layout and
   the swap into the production name, the in-place clustering change of a
   cluster-only table, a date held in a STRING column (the
-  type-change path), the preflight of security objects (policy tags, table IAM
+  type-change path), a table over 5 TiB (a measured sample copy decides
+  between one copy and a copy in ranges of the partition column), the preflight of security objects (policy tags, table IAM
   bindings, row access policies, search indexes), validation before the swap,
   rollback with a second swap, and recovery of a half-moved swap. Triggers:
   partition table, repartition, recluster, clustering, BigQuery partitioning,
   time partitioning, swap tables, convert table layout, partition by date,
-  STRING date to DATE.
+  STRING date to DATE, table over 5 TiB, ranged copy, copy in date ranges.
 ---
 
 # Convert a BigQuery table to a partitioned and clustered layout
@@ -61,10 +62,13 @@ Classify the table before anything else. The class decides the path.
 
 | Class | Condition | Path |
 |---|---|---|
-| Cluster only | The table needs clustering columns and no partitioning change. | In place with `kbagent storage clustering-set` (runbook section 4C). Copy and swap (runbook section 4, path A, without the partitioning flags) only when the owner wants the existing rows reclustered at once. |
+| Cluster only | The table needs clustering columns and no partitioning change. | In place with `kbagent storage clustering-set` (runbook section 4, in-place path). Copy and swap (runbook section 4, path A, without the partitioning flags) only when the owner wants the existing rows reclustered at once. |
 | Partition, column ready | The partition column is DATE, DATETIME or TIMESTAMP. | Copy path (runbook section 4, path A). |
 | Partition, column not ready | The date is held in a STRING column, or the table is untyped. | Type-change path (runbook section 4, path B). |
-| Any class, with a column default | At least one column has a default, whatever the partition column is. | Runbook section 4, path B: the copy path cannot set a default. Without a type change when the partition column is ready or the table is cluster only. A cluster-only table converted in place (section 4C) is not copied and keeps its defaults, so this row does not apply to it. |
+| Any class, with a column default | At least one column has a default, whatever the partition column is. | Runbook section 4, path B: the copy path cannot set a default. Without a type change when the partition column is ready or the table is cluster only. A cluster-only table converted in place (runbook section 4, in-place path) is not copied and keeps its defaults, so this row does not apply to it. |
+| Over 5 TiB | `data_size_bytes` is over 5 TiB. | Size check (runbook section 2a): a sample copy is measured and extrapolated. Path A when the copy is estimated under 4 hours, otherwise the ranged copy (runbook section 4, path C: the empty table of path B, filled range by range, each range under 4 hours). A table that needs path B takes path C. Path C refuses a cluster-only table and a table partitioned by ingestion time. A cluster-only table converted in place is not copied, so this row does not apply to it. |
+| Under 5 TiB, size check asked | The owner asks for the measured decision for a smaller table (a table near 5 TiB that grows, a pilot). | Size check (runbook section 2a), then path A or path C as above. |
+| Ranged copy by choice | The owner chose a copy in ranges for a smaller table. | Runbook section 4, path C. |
 | No key | No partition column and no clustering column is confirmed. | Stop. Ask the table owner. |
 
 ## How to run this
@@ -87,13 +91,16 @@ Ask the operator for every input before any write. Do not guess one.
 
 Then follow [references/runbook.md](references/runbook.md) from section 0.
 For a cluster-only table that is converted in place, inputs 6 to 8 are not
-needed, and the runbook goes from section 0 to section 4C.
+needed, and the runbook goes from section 0 to the in-place path of section 4.
 
 ## Guardrails
 
 - **Every write waits for a yes.** Show the command, say what it changes, and
   wait for an explicit yes from the operator. One yes covers one command.
 - **`--json` on every call**, before the subcommand.
+- **Never put `--timeout` on a ranged-copy `job run`.** When it expires,
+  kbagent kills the job (exit 7). Path C runs each range without `--wait` and
+  reads it with `job detail` until `isFinished` is true.
 - **A timeout is not a failure.** `STORAGE_JOB_TIMEOUT` (exit 4) means the job
   still runs on the server. Follow it with `storage job-detail --wait`. The
   one exception is the job of `workspace create`: its result holds the

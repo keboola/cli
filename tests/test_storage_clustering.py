@@ -37,11 +37,29 @@ def _make_service(store: ConfigStore, mock_client: MagicMock) -> StorageService:
     return StorageService(config_store=store, client_factory=lambda url, token: mock_client)
 
 
-def _table(fields: list[str] | None, is_alias: bool = False) -> dict[str, Any]:
+BIGQUERY_BUCKET = {"backend": "bigquery", "hasExternalSchema": False}
+
+
+def _table(fields: list[str] | None, is_alias: bool = False, **extra: Any) -> dict[str, Any]:
+    """A typed BigQuery table by default; ``extra`` overrides top-level keys."""
     definition: dict[str, Any] = {"columns": [{"name": "id"}]}
     if fields is not None:
         definition["clustering"] = {"fields": fields}
-    return {"id": TABLE, "isAlias": is_alias, "definition": definition}
+    table = {
+        "id": TABLE,
+        "isAlias": is_alias,
+        "isTyped": True,
+        "bucket": BIGQUERY_BUCKET,
+        "definition": definition,
+    }
+    return {**table, **extra}
+
+
+INELIGIBLE = {
+    "untyped": {"isTyped": False},
+    "snowflake": {"bucket": {"backend": "snowflake"}},
+    "external_bucket": {"bucket": {**BIGQUERY_BUCKET, "hasExternalSchema": True}},
+}
 
 
 def _client(before: list[str] | None, after: list[str] | None = None, **kw: Any) -> MagicMock:
@@ -172,6 +190,12 @@ class TestClusteringService:
         assert client.update_table_definition.call_args.kwargs["branch_id"] == 7
         client.list_dev_branches.assert_not_called()
 
+    def test_branch_zero_reports_the_default_branch_id(self, tmp_path: Path) -> None:
+        client = _client(None, ["a"])
+        result = self._run(tmp_path, client, fields=["a"], branch_id=0)
+        assert result["branch_id"] == DEFAULT_BRANCH_ID
+        client.list_dev_branches.assert_called_once()
+
     def test_default_branch_lookup_failure_leaves_branch_id_null(self, tmp_path: Path) -> None:
         client = _client(None, ["a"])
         client.list_dev_branches.side_effect = KeboolaApiError(
@@ -199,6 +223,28 @@ class TestClusteringService:
         result = self._run(tmp_path, client, clear=True)
         assert result["status"] == "unchanged"
         assert result["clustering"] is None
+        client.update_table_definition.assert_not_called()
+
+    @pytest.mark.parametrize("extra", INELIGIBLE.values(), ids=INELIGIBLE.keys())
+    def test_clear_on_table_without_clustering_support_reaches_storage(
+        self, tmp_path: Path, extra: dict[str, Any]
+    ) -> None:
+        client = _client(None)
+        client.get_table_detail.side_effect = [_table(None, **extra)]
+        client.update_table_definition.side_effect = _not_allowed()
+        with pytest.raises(KeboolaApiError) as exc_info:
+            self._run(tmp_path, client, clear=True)
+        assert exc_info.value.error_code == ErrorCode.INVALID_ARGUMENT
+        client.update_table_definition.assert_called_once()
+
+    @pytest.mark.parametrize("extra", INELIGIBLE.values(), ids=INELIGIBLE.keys())
+    def test_dry_run_clear_on_table_without_clustering_support_would_change(
+        self, tmp_path: Path, extra: dict[str, Any]
+    ) -> None:
+        client = _client(None)
+        client.get_table_detail.side_effect = [_table(None, **extra)]
+        result = self._run(tmp_path, client, clear=True, dry_run=True)
+        assert result["would_change"] is True
         client.update_table_definition.assert_not_called()
 
     def test_reordered_fields_is_an_update(self, tmp_path: Path) -> None:
