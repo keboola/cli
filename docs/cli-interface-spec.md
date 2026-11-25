@@ -499,7 +499,7 @@ Shape of the success envelope in 1.0.0 (`storage delete-table --project prod`, a
 | 1 | General failure, or a partial failure: at least one item or project failed (E4). |
 | 2 | Usage or validation error, or a refused confirmation (`CONFIRMATION_REQUIRED`, from 1.0.0). |
 | 3 | Authentication error. |
-| 4 | Network error, or a local wait that timed out while the server job keeps running. |
+| 4 | Network error, a local wait that timed out while the server job keeps running, or an operation that is already running on the server (`MR_MERGE_RUNNING`). |
 | 5 | Configuration error, for example no project resolves (`CONFIG_ERROR`). |
 | 6 | Denied by a permission policy, or a refused random-code confirmation. |
 | 7 | The job was terminated after its timeout (`JOB_TIMEOUT_TERMINATED`). |

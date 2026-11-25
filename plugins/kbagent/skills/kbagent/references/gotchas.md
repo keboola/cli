@@ -6505,7 +6505,7 @@ the web UI.
 
   ```json
   "runtime": {
-    "backend":   {"size": "small", "type": "e2bSandbox"},
+    "backend":   {"size": "small"},
     "workspace": {"enabled": true}
   }
   ```
@@ -7179,6 +7179,11 @@ It carries the command name, the outcome, and the duration -- never argument val
   `details.state: "in_merge"`) instead of `MR_NOT_READY_TO_MERGE` (exit 1): no second merge is
   started and no local cleanup runs -- the merge can still fail. Poll `detail`, do not merge
   again (since vNEXT).
+- **`merge_blockers` from the server are unioned with the live conflicts** (since vNEXT). When
+  Connection serializes `mergeBlockers` (DMD-1988), `detail` keeps every name in that list, unknown
+  kinds included, and adds `conflicts` when its live conflicts list is non-empty. Before, the
+  server list was taken as is, so an MR whose list was empty but which had live conflicts
+  read `mergeable: true`. Any blocker, known or not, makes `mergeable` false.
 - **Every result may carry `warnings[]`** (post-merge cleanup failure, a dropped
   `--change-description` on a delete resolution). A truncated conflict list inside
   `MR_MERGE_CONFLICT` carries `details.api_error_params_truncated: true` -- run `conflicts`.

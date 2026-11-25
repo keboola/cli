@@ -123,7 +123,10 @@ kbagent mr resolve --project P --component-id C --config-id I --resolved-file re
   cancel and leaves the MR in `development`.
 - `detail.mergeable` / `merge_blockers` (`conflicts`, `approvals`, `state`) are
   informational; the merge itself is the authority (409 → `MR_MERGE_CONFLICT` or
-  `MR_NOT_READY_TO_MERGE`, the latter retryable).
+  `MR_NOT_READY_TO_MERGE`, the latter retryable). When Connection sends its own
+  `mergeBlockers`, kbagent keeps them, kinds it does not know included (any blocker makes
+  `mergeable` false), and adds `conflicts` when the live conflicts list is non-empty
+  (since vNEXT).
 - The **change log is empty until the MR is sent for review** -- the backend writes it then.
   Not a gap; "what will this merge" is unavailable in `development`.
 - `allowed_actions` are state-derived and **feature-blind** in `list`: on a project where the

@@ -140,6 +140,34 @@ class TestDeriveMergeBlockers:
         assert derive_merge_blockers(_mr("some_future_state"), conflicts=[]) == ["state"]
         assert derive_merge_blockers({"id": 7}, conflicts=[]) == ["state"]
 
+    def test_server_list_is_unioned_with_live_conflicts(self) -> None:
+        # DMD-3050: the server's list must not hide a conflict the live list shows.
+        conflicts = [{"componentId": "c", "configurationId": "1"}]
+        assert derive_merge_blockers(_mr("approved", mergeBlockers=[]), conflicts) == ["conflicts"]
+        mr = _mr("in_review", mergeBlockers=["approvals"])
+        assert derive_merge_blockers(mr, conflicts) == ["approvals", "conflicts"]
+
+    def test_server_conflicts_blocker_is_not_duplicated(self) -> None:
+        conflicts = [{"componentId": "c", "configurationId": "1"}]
+        mr = _mr("approved", mergeBlockers=["conflicts"])
+        assert derive_merge_blockers(mr, conflicts) == ["conflicts"]
+
+    def test_server_list_without_live_conflicts_is_kept(self) -> None:
+        mr = _mr("in_review", mergeBlockers=["approvals"])
+        assert derive_merge_blockers(mr, conflicts=[]) == ["approvals"]
+        assert derive_merge_blockers(mr, conflicts=None) == ["approvals"]
+
+    def test_unknown_server_blockers_are_kept(self) -> None:
+        # Kinds that ship later (DMD-1988 T4) still block; junk entries are dropped.
+        mr = _mr(
+            "approved",
+            mergeBlockers=["review_not_requested", "merge_in_progress", "", None, 3],
+        )
+        assert derive_merge_blockers(mr, conflicts=[]) == [
+            "review_not_requested",
+            "merge_in_progress",
+        ]
+
 
 class TestDeriveAllowedActions:
     def test_development_offers_submit_and_direct_merge(self) -> None:
@@ -381,6 +409,45 @@ class TestGetMergeRequest:
         detail = _svc(store, factory).get_merge_request(ALIAS, 7)
         assert detail["merge_blockers"] == ["state"]
         assert detail["mergeable"] is False
+
+    def test_server_blockers_empty_but_live_conflicts_is_not_mergeable(
+        self, store, client_factory
+    ) -> None:
+        # DMD-3050: the server says nothing blocks, the live conflicts list disagrees.
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "approved", mergeBlockers=[])
+        mock.merge_requests.conflicts.return_value = [{"componentId": "c", "configurationId": "1"}]
+        detail = _svc(store, factory).get_merge_request(ALIAS, 7)
+        assert detail["merge_blockers"] == ["conflicts"]
+        assert detail["mergeable"] is False
+
+    def test_server_approvals_without_conflicts(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "in_review", mergeBlockers=["approvals"])
+        mock.merge_requests.conflicts.return_value = []
+        detail = _svc(store, factory).get_merge_request(ALIAS, 7)
+        assert detail["merge_blockers"] == ["approvals"]
+        assert detail["mergeable"] is False
+
+    def test_unknown_server_blocker_is_not_mergeable(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(
+            7, "approved", mergeBlockers=["review_not_requested"]
+        )
+        mock.merge_requests.conflicts.return_value = []
+        detail = _svc(store, factory).get_merge_request(ALIAS, 7)
+        assert detail["merge_blockers"] == ["review_not_requested"]
+        assert detail["mergeable"] is False
+
+    def test_server_empty_blockers_and_no_conflicts_is_mergeable(
+        self, store, client_factory
+    ) -> None:
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "approved", mergeBlockers=[])
+        mock.merge_requests.conflicts.return_value = []
+        detail = _svc(store, factory).get_merge_request(ALIAS, 7)
+        assert detail["merge_blockers"] == []
+        assert detail["mergeable"] is True
 
     def test_activity_log_flag_passes_through(self, store, client_factory) -> None:
         factory, mock = client_factory
