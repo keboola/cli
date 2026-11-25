@@ -152,7 +152,7 @@ class TestSetSecretsValidation:
     @pytest.mark.parametrize(
         "bad_key",
         [
-            "BAD",  # no #
+            "1bad",  # no #, starts with digit ('#' is added, then refused)
             "#1bad",  # starts with digit
             "#bad key",  # space
             "#bad\x00null",  # NUL

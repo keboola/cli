@@ -426,7 +426,9 @@ plugins/kbagent/
 #   on a terminal under --json). `branch delete` and `workspace delete` now ask too, and take --yes and a read-only --dry-run
 #   (REST: `dry_run` query parameter, no prompt). Deprecated flags (spec C3) are hidden options from
 #   `deprecated_option()` with a `DEPRECATIONS` entry. They add a DEPRECATED warning (`replacement`,
-#   `remove_after`). None exists now. 1.0.0 removed every old form (#791): `stream delete --force` (use
+#   `remove_after`). No deprecated flag exists now. A deprecated behavior of a live command is a
+#   `DEPRECATIONS` entry with behavior=True; the command calls warn_deprecated() itself (now: the
+#   plain-key use of data-app secrets-list/get/remove, see the data-app section). 1.0.0 removed every old form (#791): `stream delete --force` (use
 #   --yes), `semantic-layer import --yes`/-y (no effect), `project add/create --project`/-p (use --alias),
 #   `project refresh --all` (use --all-projects), `--id` on merge-request, agent and
 #   semantic-layer reference-data get/delete commands, `branch merge`, `semantic-layer scope
@@ -1282,10 +1284,24 @@ kbagent data-app password [--project NAME] --app-id ID [--copy] [--reveal] [--op
 #   Version gate + agent rules: gotchas.md / AGENT_CONTEXT.
 kbagent data-app logs [--project NAME] --app-id ID [--lines N] [--since ISO8601]
 kbagent data-app runs [--project NAME] --app-id ID [--limit N]
-kbagent data-app secrets-set [--project ALIAS] --app-id ID --secret '#KEY=VALUE' [--secret ...] [--secret-file PATH] [--branch ID] [--allow-plaintext-on-encrypt-failure] [--dry-run] [--no-hint-next]
+kbagent data-app secrets-set [--project ALIAS] --app-id ID --secret 'KEY=VALUE' [--secret ...] [--secret-file PATH] [--branch ID] [--allow-plaintext-on-encrypt-failure] [--dry-run] [--no-hint-next]   # '#' optional, always stored encrypted under '#KEY'
 kbagent data-app secrets-list [--project ALIAS] --app-id ID [--branch ID] [--show-fingerprint]
 kbagent data-app secrets-get [--project ALIAS] --app-id ID --key 'KEY' [--branch ID]   # '#' optional; plain values return their value, encrypted return metadata only
 kbagent data-app secrets-remove [--project ALIAS] --app-id ID --key 'KEY' [--key ...] [--branch ID] [--yes] [--dry-run]   # '#' optional
+kbagent data-app env-set [--project ALIAS] --app-id ID --var KEY=VALUE [--var ...] [--var-file PATH] [--branch ID] [--dry-run] [--no-hint-next]
+kbagent data-app env-list [--project ALIAS] --app-id ID [--branch ID] [--limit N]
+kbagent data-app env-get [--project ALIAS] --app-id ID --key KEY [--branch ID]
+kbagent data-app env-remove [--project ALIAS] --app-id ID --key KEY [--key ...] [--branch ID] [--yes] [--dry-run]
+# env-* (#738): plain (unencrypted) env vars = keys WITHOUT '#' in parameters.dataApp.secrets, stored
+#   in clear, never encrypted; env-list/env-get show values. A '#' key is INVALID_ARGUMENT (exit 2)
+#   naming the secrets-* command. One runtime env var name has one kind ('#' stripped, '-' -> '_',
+#   uppercased): env-set on a secret's name and secrets-set on a plain var's name are INVALID_ARGUMENT
+#   naming secrets-remove / env-remove; nothing written, dry run too (services/_data_app_env.py).
+#   status: env-set updated|unchanged, env-remove and secrets-remove removed|unchanged. secrets-list
+#   entries carry kind (secret|env). A plain key on secrets-list/get/remove still works and adds a
+#   DEPRECATED warning (behavior entries in DEPRECATIONS, remove_after 2026-12-23); after that the
+#   secrets-* commands refuse plain keys. serve: GET/PATCH /data-apps/{p}/{app}/env, GET .../env/{key},
+#   POST .../env/remove. Version gate lives in gotchas.md.
 kbagent data-app validate-repo --git-repo URL [--git-branch BRANCH] [--git-public/--no-git-public] [--git-pat-env VAR | --git-pat-file PATH] [--type python-js] [--strict]
 kbagent data-app git-repo [--project NAME] --app-id ID
 kbagent data-app git-credentials [--project NAME] --app-id ID

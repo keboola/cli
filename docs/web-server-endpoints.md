@@ -9,7 +9,7 @@ auth, and the concepts behind these routes live in
 [`web-server.md`](web-server.md); a running server serves the same spec
 interactively at `/docs` (Swagger) and `/openapi.json`.
 
-**276 operations** across **233 paths** and **34 routers**.
+**280 operations** across **236 paths** and **34 routers**.
 
 Paths are shown as the server registers them. Reaching them through the
 Node BFF (or single-process `--ui` mode) prefixes every path with `/api`.
@@ -296,7 +296,7 @@ Flow Notifications-tab recipients (Notification Service subscriptions) -- audit 
 | `POST` | `/notifications/{project}/{subscription_id}/replace-recipient` | Replace a subscription's recipient |
 | `POST` | `/notifications/{project}/{subscription_id}/clone` | Create a subscription from an existing one |
 
-### `data-apps` (19 operations)
+### `data-apps` (23 operations)
 
 Python/JS (default), Streamlit and R data apps -- create, deploy, start/stop, manage secrets. Mirrors `kbagent data-app *`.
 
@@ -316,6 +316,10 @@ Python/JS (default), Streamlit and R data apps -- create, deploy, start/stop, ma
 | `PATCH` | `/data-apps/{project}/{app_id}/secrets` | Set data app secrets |
 | `GET` | `/data-apps/{project}/{app_id}/secrets/{key}` | Get a single data app secret |
 | `POST` | `/data-apps/{project}/{app_id}/secrets/remove` | Remove data app secrets |
+| `GET` | `/data-apps/{project}/{app_id}/env` | List data app plain env vars |
+| `PATCH` | `/data-apps/{project}/{app_id}/env` | Set data app plain env vars |
+| `GET` | `/data-apps/{project}/{app_id}/env/{key}` | Get a data app plain env var |
+| `POST` | `/data-apps/{project}/{app_id}/env/remove` | Remove data app plain env vars |
 | `GET` | `/data-apps/{project}/{app_id}/git-repo` | Get a data app's git repository |
 | `GET` | `/data-apps/{project}/{app_id}/git-repo/credentials` | List managed git credentials |
 | `POST` | `/data-apps/{project}/{app_id}/git-repo/credentials` | Create a managed git credential |

@@ -239,6 +239,11 @@ OPERATION_REGISTRY: dict[str, str] = {
     "data-app.secrets-list": "read",
     "data-app.secrets-get": "read",
     "data-app.secrets-remove": "destructive",
+    # Data apps - plain env vars (keys without '#'); same classes as secrets-*
+    "data-app.env-set": "write",
+    "data-app.env-list": "read",
+    "data-app.env-get": "read",
+    "data-app.env-remove": "destructive",
     "data-app.validate-repo": "read",
     # Data apps - git-repo introspection + managed-repo credentials
     "data-app.git-repo": "read",

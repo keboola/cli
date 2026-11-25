@@ -157,6 +157,10 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | List the keys in parameters.dataApp.secrets, with derived runtime env-var names | `kbagent data-app secrets-list --project PROJECT --app-id APP-ID` |
 | Show ONE key from parameters.dataApp.secrets | `kbagent data-app secrets-get --project PROJECT --app-id APP-ID --key KEY` |
 | Remove one or more app-runtime secrets. | `kbagent data-app secrets-remove --project PROJECT --app-id APP-ID --key KEY` |
+| Write plain (unencrypted) env vars to the linked Storage config | `kbagent data-app env-set --project PROJECT --app-id APP-ID` |
+| List the plain (unencrypted) env vars of a data app, with their values | `kbagent data-app env-list --project PROJECT --app-id APP-ID` |
+| Show ONE plain (unencrypted) env var of a data app, with its value | `kbagent data-app env-get --project PROJECT --app-id APP-ID --key KEY` |
+| Remove plain (unencrypted) env vars from a data app. | `kbagent data-app env-remove --project PROJECT --app-id APP-ID --key KEY` |
 | Copy the password of a password-protected data app to the clipboard | `kbagent data-app password --project PROJECT --app-id APP-ID` |
 | List jobs of the active project, the given projects, or all projects | `kbagent job list --project PROJECT` |
 | Show detailed information about a specific job | `kbagent job detail --project PROJECT --job-id JOB-ID` |

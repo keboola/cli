@@ -820,7 +820,8 @@ explicit Storage config version, never the empty shell the create writes.
     WHY a deployment failed. Project storage token only.
 
   data-app secrets-set
-    Encrypt and write '#'-prefixed secrets into parameters.dataApp.secrets.
+    Encrypt and write secrets into parameters.dataApp.secrets. The '#' is
+    optional on input: 'KEY=VALUE' is stored encrypted under '#KEY'.
     Per-project KMS via the Encryption API; ciphertext does not cross
     projects (writeup §8). Read-modify-write at the service layer to
     preserve sibling keys; never use Storage merge=True for nested edits.
@@ -828,11 +829,15 @@ explicit Storage config version, never the empty shell the create writes.
     replaced with '_', uppercased ('#my-api-key' -> 'MY_API_KEY').
     Adding a secret bumps the Storage version; the running container
     keeps the OLD config until the next 'kbagent data-app deploy'.
+    Refused (INVALID_ARGUMENT, exit 2) when a plain env var already has
+    the runtime env var name: remove it with 'data-app env-remove' first.
 
   data-app secrets-list
     List the keys in parameters.dataApp.secrets with derived runtime
-    env-var names. Never echoes encrypted ciphertext in full and never
-    decrypts. --show-fingerprint includes a short fingerprint per key.
+    env-var names and `kind` (secret | env). Never echoes encrypted
+    ciphertext in full and never decrypts. --show-fingerprint includes a
+    short fingerprint per key. Listing a plain key adds a DEPRECATED
+    warning (remove_after 2026-12-23): use 'data-app env-list'.
 
   data-app secrets-get
     Show ONE key from parameters.dataApp.secrets. Leading '#' is OPTIONAL
@@ -842,12 +847,26 @@ explicit Storage config version, never the empty shell the create writes.
     echoed (Encryption API has no decrypt endpoint). PLAIN value -> the
     literal value (encrypted: false), already visible via config detail.
     NOT_FOUND on absent key (exact match); never enumerates siblings.
+    A plain key adds a DEPRECATED warning: use 'data-app env-get'.
 
   data-app secrets-remove
     Remove one or more keys (encrypted secrets OR plain env vars; leading
-    '#' optional). Idempotent (missing keys -> exit 0, removed: 0).
-    Destructive: a removal can break the running app at next deploy if it
-    depends on the value. Confirmation prompt unless --yes or --json.
+    '#' optional). Idempotent (missing keys -> exit 0, removed: [],
+    status: unchanged). Destructive: a removal can break the running app at
+    next deploy if it depends on the value. Confirmation prompt unless
+    --yes or --json. A plain key adds a DEPRECATED warning: use
+    'data-app env-remove'.
+
+  data-app env-set / env-list / env-get / env-remove
+    Plain (unencrypted) env vars: the keys WITHOUT '#' in
+    parameters.dataApp.secrets, stored in clear, never encrypted. Use them
+    for values that are not secret (log level, admin e-mails, feature
+    flags); env-list and env-get show the values. env-set --var KEY=VALUE
+    (repeatable) or --var-file PATH (JSON object). A key with '#' is
+    refused by every env-* command (INVALID_ARGUMENT, exit 2), and so is
+    env-set on a name that an encrypted secret already has (remove it with
+    'data-app secrets-remove' first). status: env-set updated|unchanged,
+    env-remove removed|unchanged. Never deploys; run 'data-app deploy --wait'.
 
   data-app validate-repo
     Pre-flight check that a git repo follows the Keboola data-app

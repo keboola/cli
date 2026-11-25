@@ -363,6 +363,23 @@ Keboola data-app lifecycle (create, deploy, manage)
   kbagent data-app detail [--project PROJECT] --app-id ID [--branch N]
     Show merged Data Science + Storage detail for one data app.
 
+  kbagent data-app env-get [--project PROJECT] --app-id ID --key KEY
+      [--branch N]
+    Show ONE plain (unencrypted) env var of a data app, with its value.
+
+  kbagent data-app env-list [--project PROJECT] --app-id ID [--branch N]
+      [--limit N]
+    List the plain (unencrypted) env vars of a data app, with their values.
+
+  kbagent data-app env-remove [--project PROJECT] --app-id ID --key KEY ...
+      [--branch N] [--yes] [--dry-run]
+    Remove plain (unencrypted) env vars from a data app. A missing key is exit
+    0.
+
+  kbagent data-app env-set [--project PROJECT] --app-id ID [--var VAR ...]
+      [--var-file PATH] [--branch N] [--dry-run] [--no-hint-next]
+    Write plain (unencrypted) env vars to the linked Storage config.
+
   kbagent data-app git-auth-set [--project PROJECT] --app-id ID
       --git-auth AUTH [--git-repo REPO] [--git-branch BRANCH] [--branch N]
       [--dry-run]

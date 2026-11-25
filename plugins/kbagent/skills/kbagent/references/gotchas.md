@@ -127,6 +127,15 @@ These lists keep `error`, because their entries are not failed items with an err
 - **A data check that must stop the job is `SET ABORT_TRANSFORMATION = (SELECT IFF(<ok>, '', '<message>') ...)`**, never `SELECT ... 1/0`: the SELECT form is skipped, so the job succeeds with bad data and sends no failure notification. Until Snowflake transformation 1.7.1 a comment or line break before the SELECT made such a check run by accident. `kbagent doctor --check skipped-selects` lists every skipped SELECT in the connected projects (production branch; a plain `doctor` only names this optional check and its command), `ran_before_fix: true` for those that ran until 1.7.1. Details: [transformation-workflow.md](transformation-workflow.md).
 - **`config update` / `config row-update` do not check.** Other SQL transformation components (Synapse, Redshift, ...) are not checked: their runtime was not verified.
 
+## Data apps: secrets are always encrypted, plain env vars have `env-*` commands
+
+*(since vNEXT)*
+
+- **`data-app secrets-set` takes a key without `#`.** `--secret API_KEY=...` (and a `--secret-file` key without `#`) is stored encrypted under `#API_KEY`, the same as `--secret '#API_KEY=...'`. Before, a key without `#` was refused with `DATA_APP_INVALID_SECRET`. `secrets-set` never writes a plain value.
+- **New `data-app env-set`, `env-list`, `env-get` and `env-remove`** manage plain (unencrypted) env vars: the keys without `#` in `parameters.dataApp.secrets`. `env-set --var KEY=VALUE` (or `--var-file PATH`, a JSON object) stores the value in clear and never calls the Encryption API. `env-list` and `env-get` show the values. A key with `#` is refused by every `env-*` command with `INVALID_ARGUMENT` (exit 2), and the message names the matching `secrets-*` command. REST: `GET/PATCH /data-apps/{project}/{app_id}/env`, `GET .../env/{key}`, `POST .../env/remove`.
+- **A secret and a plain env var cannot share a runtime env var name.** The runtime strips `#`, replaces `-` with `_` and uppercases, so `#API_KEY` and `api-key` are both `API_KEY`. `env-set` is refused when a secret has the name, and `secrets-set` is refused when a plain env var has it: `INVALID_ARGUMENT`, exit 2 (HTTP 400 over serve), nothing written, also with `--dry-run`. The message names the command that removes the old key (`secrets-remove` or `env-remove`); `error.details.collisions` lists the pairs.
+- **Plain keys on `secrets-list`, `secrets-get` and `secrets-remove` are deprecated.** They still work, and each use adds a `DEPRECATED` entry to `warnings[]` (one stderr line in human mode; the `Kbagent-Warnings` header over serve) with `replacement` (`data-app env-list` / `env-get` / `env-remove`) and `remove_after: 2026-12-23`. After that date a release will make these commands refuse a plain key. `secrets-list` entries carry `kind`: `secret` or `env`. `secrets-remove` reports `status`: `removed` or `unchanged`.
+
 ## Data apps clone a private GitHub repo through the organization connection: `--git-auth organization`, `git-auth-set`
 
 *(since 1.1.0)*

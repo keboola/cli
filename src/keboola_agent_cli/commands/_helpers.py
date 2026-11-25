@@ -951,7 +951,10 @@ class Deprecation:
     date after which a minor release may remove a deprecated form.
     ``removed_in`` is the version that removed the form: the form is an
     error, and the error says ``message``. ``other_names`` are further option
-    names of the form, such as its short flag.
+    names of the form, such as its short flag. ``behavior`` marks a deprecated
+    behavior of a live command, not an option or a command: the key is the
+    command path and a name of the behavior, and the command adds the warning
+    itself with :func:`warn_deprecated` when a call uses the behavior.
     """
 
     message: str
@@ -960,6 +963,7 @@ class Deprecation:
     remove_after: str | None = None
     removed_in: str | None = None
     other_names: tuple[str, ...] = ()
+    behavior: bool = False
 
 
 # C3: every deprecated or removed form, keyed by its command path and option,
@@ -970,6 +974,32 @@ class Deprecation:
 # replacement. 1.0.0 removed the forms that 0.x and the 1.0 pre-releases kept
 # for compatibility (#791).
 DEPRECATIONS: dict[str, Deprecation] = {
+    # A plain (non-'#') key belongs to the `data-app env-*` commands. After
+    # remove_after, the secrets-* commands refuse a plain key.
+    "data-app secrets-list plain-key": Deprecation(
+        message="data-app secrets-list still lists plain (non-'#') keys, but this is "
+        "deprecated: use data-app env-list for plain env vars.",
+        hint="kbagent data-app env-list",
+        replacement="data-app env-list",
+        remove_after="2026-12-23",
+        behavior=True,
+    ),
+    "data-app secrets-get plain-key": Deprecation(
+        message="data-app secrets-get still reads a plain (non-'#') key, but this is "
+        "deprecated: use data-app env-get for plain env vars.",
+        hint="kbagent data-app env-get --key KEY",
+        replacement="data-app env-get",
+        remove_after="2026-12-23",
+        behavior=True,
+    ),
+    "data-app secrets-remove plain-key": Deprecation(
+        message="data-app secrets-remove still removes a plain (non-'#') key, but this is "
+        "deprecated: use data-app env-remove for plain env vars.",
+        hint="kbagent data-app env-remove --key KEY",
+        replacement="data-app env-remove",
+        remove_after="2026-12-23",
+        behavior=True,
+    ),
     "stream delete --force": Deprecation(
         message="stream delete --force was removed in 1.0.0. Use --yes to skip the confirmation.",
         hint="--yes",
@@ -1291,7 +1321,7 @@ def deprecated_option(form: str, *param_decls: str, renamed_to: str | None = Non
     parameter, when the caller left it out, takes this value, also when it is
     required.
     """
-    if form not in DEPRECATIONS or DEPRECATIONS[form].removed_in:
+    if form not in DEPRECATIONS or DEPRECATIONS[form].removed_in or DEPRECATIONS[form].behavior:
         raise KeyError(f"{form!r} has no DEPRECATIONS entry of a deprecated form")
 
     def _warn(ctx: typer.Context, value: Any) -> Any:
