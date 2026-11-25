@@ -237,8 +237,9 @@ def derive_merge_blockers(mr: dict[str, Any], conflicts: list[dict[str, Any]] | 
     blockers don't mask each other (unlike GitHub's single-valued
     ``mergeable_state``).
 
-    Server-first (``mergeBlockers``, DMD-1988). Local fallback, in
-    deterministic order:
+    Server-first (``mergeBlockers``, DMD-1988): the server's list, unknown
+    kinds included, plus ``conflicts`` when the live list is non-empty.
+    Local fallback, in deterministic order:
 
     - ``conflicts``: the live conflicts list is non-empty. Pass ``None`` when
       conflicts were not fetched (list rows) -- absence of data is not
@@ -257,7 +258,16 @@ def derive_merge_blockers(mr: dict[str, Any], conflicts: list[dict[str, Any]] | 
     """
     server = mr.get("mergeBlockers")
     if isinstance(server, list):
-        return [str(blocker) for blocker in server]
+        # Kept verbatim, unknown kinds included (review_not_requested,
+        # merge_in_progress, ... arrive later): a blocker kbagent does not know
+        # still blocks, so `mergeable` stays false. The live conflicts list this
+        # call just fetched is unioned in -- the server's list is serialized
+        # with the MR and must not hide a conflict that exists now (DMD-3050,
+        # same rule as the MCP server's derive_merge_blockers).
+        blockers = [blocker for blocker in server if isinstance(blocker, str) and blocker]
+        if conflicts and "conflicts" not in blockers:
+            blockers.append("conflicts")
+        return blockers
 
     state = mr.get("state") or ""
     blockers: list[str] = []
