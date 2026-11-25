@@ -102,8 +102,13 @@ Read from the result:
   schema: `native_type`, `nullable` and `length` are missing, or they are
   hints that a component wrote to the column metadata (a hint can say `DATE`
   on a column that BigQuery holds as STRING). So for an untyped table ignore
-  those three keys and record every column as `STRING`, nullable, without a
-  length and without a default. Sections 4b and 5 use the recorded values.
+  those three keys and record every column as `STRING`, without a length
+  and without a default. Take the nullability from BigQuery: `mode` of each
+  field in the `bq show` output of "BigQuery-native objects" below, where
+  `REQUIRED` means NOT NULL. BigQuery holds the columns of an untyped table
+  as `STRING` with mode `REQUIRED`, so a copy with nullable columns would
+  drop NOT NULL from every column without a failed check. Sections 4b and 5
+  use the recorded values.
 - `rows_count`, `data_size_bytes`, `primary_key`, `last_import_date`.
 - `column_details[].native_type`: the type of every column. The type of `COL`
   decides the path. DATE, DATETIME or TIMESTAMP is path A. STRING is path B.
@@ -574,6 +579,12 @@ When `bad_values` is above 0: stop and report the sample values of the second
 query to the owner. No table is created. Delete the helper workspace (the
 `workspace delete` command of section 1).
 
+An untyped table holds an empty string where a typed table holds NULL. An
+empty string in `COL` does not parse, so it counts as a bad value and stops
+the run here. The owner decides whether an empty value becomes NULL: then
+use `NULLIF(COL, '')` in place of `COL` in the queries of this section, in
+`DAY_EXPR` and in the fill, and create `COL` nullable in 4b.
+
 #### 4b. Create the empty typed table with the layout
 
 Every column keeps its type from `column_details`, with its length: a column
@@ -584,7 +595,9 @@ source. On an untyped table every column is `STRING`. With a type change `COL`
 becomes `DATE`; without one it keeps its type and length like every other
 column, and a cluster-only table gets no `--time-partitioning-*` flags. NOT NULL and the primary key are the
 same as on the source: pass one `--not-null-column` for every column recorded
-with `nullable: false` in section 1. Every column default recorded in section 1
+with `nullable: false` in section 1. For an untyped table those are the
+columns with mode `REQUIRED`; `COL` is one of them unless the owner mapped
+its empty values to NULL (4a). Every column default recorded in section 1
 (`column_details[].default`) is repeated with `--default name=value`: the copy
 does not inherit a default, and a column that loses it writes NULL on the next
 insert that omits it, or fails its NOT NULL constraint.
