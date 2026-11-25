@@ -1,10 +1,25 @@
 """Pydantic models shared across all layers of the application."""
 
 import sys
+from enum import StrEnum
 from typing import Any
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, field_validator
+
+
+class ImportMethod(StrEnum):
+    """How a Snowflake table import writes the destination table (``importMethod``).
+
+    ``auto`` is the platform default and is never sent: the API treats an
+    absent ``importMethod`` as ``auto``. An explicit other value on a
+    non-Snowflake table is refused by Storage with HTTP 400
+    ``storage.tables.importMethodNotSupported``.
+    """
+
+    auto = "auto"
+    single_statement = "single_statement"
+    multi_statement = "multi_statement"
 
 
 def normalize_stack_url(value: str) -> str:

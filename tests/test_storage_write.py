@@ -12,7 +12,7 @@ from keboola_agent_cli.client import TableUploadOutcome
 from keboola_agent_cli.config_store import ConfigStore
 from keboola_agent_cli.constants import TABLE_DATA_JOB_MAX_WAIT
 from keboola_agent_cli.errors import ErrorCode, KeboolaApiError
-from keboola_agent_cli.models import AppConfig, ProjectConfig
+from keboola_agent_cli.models import AppConfig, ImportMethod, ProjectConfig
 from keboola_agent_cli.services.storage_service import StorageService
 
 runner = CliRunner()
@@ -682,6 +682,7 @@ class TestUploadTableService:
             wait=True,
             max_wait=None,
             on_progress=None,
+            import_method=ImportMethod.auto,
         )
         mock_client.close.assert_called_once()
 
@@ -714,6 +715,7 @@ class TestUploadTableService:
             wait=True,
             max_wait=None,
             on_progress=None,
+            import_method=ImportMethod.auto,
         )
 
     def test_custom_delimiter_and_enclosure(self, tmp_path: Path) -> None:
@@ -745,6 +747,7 @@ class TestUploadTableService:
             wait=True,
             max_wait=None,
             on_progress=None,
+            import_method=ImportMethod.auto,
         )
 
     def test_warnings_passed_through(self, tmp_path: Path) -> None:
@@ -1682,6 +1685,7 @@ class TestUploadTableCLI:
             wait=True,
             timeout=None,
             on_progress=None,
+            import_method=ImportMethod.auto,
         )
 
     def test_upload_table_incremental(self, tmp_path: Path) -> None:
@@ -1729,6 +1733,7 @@ class TestUploadTableCLI:
             wait=True,
             timeout=None,
             on_progress=None,
+            import_method=ImportMethod.auto,
         )
 
     def test_upload_table_file_not_found(self, tmp_path: Path) -> None:
@@ -1831,6 +1836,7 @@ class TestUploadTableCLI:
             wait=True,
             timeout=None,
             on_progress=None,
+            import_method=ImportMethod.auto,
         )
 
 
@@ -2008,6 +2014,7 @@ class TestUploadTableBranch:
             wait=True,
             max_wait=None,
             on_progress=None,
+            import_method=ImportMethod.auto,
         )
 
     def test_cli_branch_flag(self, tmp_path: Path) -> None:

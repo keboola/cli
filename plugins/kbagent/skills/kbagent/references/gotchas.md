@@ -8002,6 +8002,28 @@ production and `--branch 0` stay `null`. The `--dry-run` body of `data-app
 create` shows the same string. On an older version, create the app in
 production or in the Keboola UI.
 
+## `--import-method` chooses how a Snowflake import writes the table
+
+*(since vNEXT)*
+
+`storage upload-table` and `storage load-file` take `--import-method auto|single_statement|multi_statement`
+(serve: `import_method` on the upload form and the load-to-table body). `auto`, the default, sends
+nothing and keeps the platform default. Details and the output-mapping key `import_method`:
+`import-method-workflow.md`.
+
+- **Snowflake only.** Another value than `auto` on a table of another backend is `INVALID_ARGUMENT`,
+  exit 2 (HTTP 400 over serve), and nothing is imported. Run the import again without the option.
+- **`upload-table` refuses before it writes.** It reads the bucket's backend first (for a bucket it
+  would auto-create: the project's default backend), so nothing is created or uploaded. A failed read
+  (403, or 404 with `--no-auto-create`) never stops the upload. Only when no
+  backend can be read does Storage refuse the import itself (HTTP 400
+  `storage.tables.importMethodNotSupported`); the file is then already in Storage, and the error names
+  the `storage load-file` command that imports it without the method and any bucket or table it
+  auto-created. `load-file` relies on that 400 (it writes nothing before the import).
+- **The result echoes what you asked for, not what ran.** `import_method` in the result is the
+  requested value. The `tableImportDone` event of the table has the method Storage used
+  (`importMethod`) and why (`importMethodSource`: `request`, `projectFeature` or `default`).
+
 ## `semantic-layer edit` overwrote a concurrent change to another field
 
 *(since 1.4.0)* `semantic-layer edit metric|dataset|constraint|relationship|glossary`

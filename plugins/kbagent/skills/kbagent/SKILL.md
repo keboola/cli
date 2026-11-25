@@ -466,6 +466,7 @@ For detailed response parsing rules and common pitfalls, see [gotchas](reference
 | **Data apps** (create / deploy / start / stop / password / delete; the §9 redeploy contract) | [data-app-workflow](references/data-app-workflow.md) |
 | Storage Files (upload, download, tags, load/unload) | [storage-files-workflow](references/storage-files-workflow.md) |
 | **Large file upload** (100+ GB CSV / `.csv.gz` into one table; S3 multipart; `upload-table --no-wait` + `storage job-detail --wait`; never re-run while the import job runs) | [large-upload-workflow](references/large-upload-workflow.md) |
+| **Snowflake import method** (`--import-method` on `upload-table` / `load-file`, output-mapping key `import_method`; Snowflake only, a 400 elsewhere) | [import-method-workflow](references/import-method-workflow.md) |
 | **Table snapshots** (point-in-time backup; restore as a NEW table; `--name` required, no overwrite) | [snapshot-workflow](references/snapshot-workflow.md) |
 | **Python library** (`from keboola_agent_cli import Client` -- in-process query + Storage Files, no CLI/daemon/config-dir) | [library-workflow](references/library-workflow.md) |
 | **Data Streams (OTLP / OpenTelemetry)** (create/inspect OTLP source, masked secret-in-URL, OTEL_EXPORTER_OTLP_ENDPOINT) | [stream-workflow](references/stream-workflow.md) |
