@@ -61,6 +61,7 @@ Classify the table before anything else. The class decides the path.
 | Partition, column not ready | The date is held in a STRING column, or the table is untyped. | Type-change path (runbook section 4, path B). |
 | Any class, with a column default | At least one column has a default, whatever the partition column is. | Runbook section 4, path B: the copy path cannot set a default. Without a type change when the partition column is ready or the table is cluster only. |
 | Over 5 TiB | `data_size_bytes` is over 5 TiB. | Size check (runbook section 2a): a sample copy is measured and extrapolated. Path A when the copy is estimated under 4 hours, otherwise the ranged copy (runbook section 4, path C: the empty table of path B, filled range by range, each range under 4 hours). A table that needs path B takes path C. Path C refuses a cluster-only table and a table partitioned by ingestion time. |
+| Under 5 TiB, size check asked | The owner asks for the measured decision for a smaller table (a table near 5 TiB that grows, a pilot). | Size check (runbook section 2a), then path A or path C as above. |
 | Ranged copy by choice | The owner chose a copy in ranges for a smaller table. | Runbook section 4, path C. |
 | No key | No partition column and no clustering column is confirmed. | Stop. Ask the table owner. |
 

@@ -57,6 +57,20 @@ of the workspace service account as `gcp_project`. Check it before any other
 `bq` command: `bq --project_id=GCP_PROJECT show DATASET.T` must find the
 table, and `tableReference.datasetId` in its output must equal `DATASET`.
 
+A `workspace query` with `--full` returns its result only as CSV text with a
+header line, in `data.statements[].csv_data`. It has no `columns` and no
+`rows`: a filter that reads `rows` sees nothing for every `--full` query, and
+a check that expects an empty result then passes whatever the data. Read the
+result of the last statement with:
+
+```bash
+kbagent --json workspace query --project ALIAS --workspace-id WS_ID --full --sql "SELECT 1 AS x" | jq -r '.data.statements[-1].csv_data'
+```
+
+An empty result is the header line alone. A `csv_data` that is missing or
+null is not an empty result: kbagent could not fetch the result. Run the
+query again, and never pass a check on it.
+
 A `bq` command that ends with "not found" or with a permission error has read
 nothing. It does not mean that there is nothing to carry. Treat the objects
 as unknown and refuse the table (section 1, refuse rules).
@@ -146,7 +160,7 @@ kbagent --json storage bucket-detail --project ALIAS --bucket-id B | jq '.data |
 Refuse the table when `is_linked` is true. A linked bucket is read-only in
 this project, so it cannot hold `T_repart`.
 
-Five refuse rules need only these two results: the backend is not BigQuery,
+Four refuse rules need only these two results: the backend is not BigQuery,
 the bucket is linked, the table is an alias, or `requirePartitionFilter` is
 true ("Refuse rules" below). Check them now. A table that is refused here
 leaves nothing behind, because nothing was created yet.
@@ -155,8 +169,9 @@ A table with `data_size_bytes` over 5 TiB (5,497,558,138,880 bytes) is not
 refused for its size. Section 2a measures a sample copy and decides between
 path A (one copy, when it finishes in under 4 hours) and path C, the ranged
 copy (section 4, path C): a single copy that runs past the 6-hour limit of a
-BigQuery query fails. The owner may also choose path C for a smaller table.
-Record the reason for path C.
+BigQuery query fails. For a smaller table the owner may ask for the same
+size check (for example a table just under 5 TiB that grows, or a pilot), or
+choose path C directly. Record the reason for path C.
 
 ### Helper workspace
 
@@ -459,8 +474,8 @@ it binds each range: a range covers at most 4,000 partitions.
 
 ## 2a. Size check: path A or path C (tables over 5 TiB)
 
-Run this section only when `data_size_bytes` is over 5 TiB
-(5,497,558,138,880 bytes). It decides whether one path A copy finishes in
+Run this section when `data_size_bytes` is over 5 TiB (5,497,558,138,880
+bytes), or when the owner asks for it for a smaller table. It decides whether one path A copy finishes in
 time, or whether the table is copied in ranges (path C). It runs before the
 writers are paused: it reads `B.T` and writes only scratch tables.
 
@@ -563,19 +578,30 @@ dominated by fixed overhead.
 From the `INSERT` job of step 5:
 
 - `S` = `slot_ms` / 1000, the slot-seconds of the copy.
-- `D` = `end` - `start` in seconds, the duration of the copy.
+- `D` = (`end` - `start`) / 1000, the duration of the copy in seconds.
+  `start`, `end` and `slot_ms` are milliseconds (since the epoch for the two
+  times), printed as strings.
 - `G_sample` = `data_size_bytes` of `B.T_sample` / 10^9.
 - `G` = `data_size_bytes` of `B.T` / 10^9.
 - rate `r` = `S` / `G_sample` (slot-s per GB; 32.7 on 2026-11-25).
 - measured concurrency `c` = `S` / `D` (slots; 84 on 2026-11-25).
-- slot time of the full copy `F` = `r` x `G` slot-seconds.
+- slot time of the full copy `F` = 2 x `r` x `G` slot-seconds.
 - `T_high` = `F` / `c`: the time when the copy gets only the slots that the
   sample got.
 - `T_low` = `F` / `max_slots`: the time when the copy gets every slot of the
   reservation.
 
-Example with the 2026-11-25 numbers: 16 TiB (17,592 GB) gives `F` = 575,000
-slot-s, 160 slot-hours, `T_high` = 1.9 h, `T_low` = 0.5 h.
+The factor 2 in `F` is a safety margin. The rate of the same copy on the same
+table varied by a factor of 2 between runs: 25.7 slot-s per GB from a 1.7 GB
+sample, 52.7 for the whole 9.2 GB table right after it, 32.7 on 2026-11-25.
+One sample does not pin the rate closer than that. Keep the sample at 10 GB
+or more: a smaller sample also gets fewer slots (21.9 against about 90 for
+the whole table in the same run), which understates `c` and inflates
+`T_high`.
+
+Example with the 2026-11-25 numbers: 16 TiB (17,592 GB) gives `F` =
+1,150,000 slot-s, 320 slot-hours with the factor, `T_high` = 3.8 h,
+`T_low` = 1.1 h.
 
 | Estimate | Path |
 |---|---|
@@ -583,8 +609,8 @@ slot-s, 160 slot-hours, `T_high` = 1.9 h, `T_low` = 0.5 h.
 | `T_high` 4 hours or more, `T_low` under 4 hours | The owner decides: path A when the reservation can give the copy more slots than the sample got for its whole duration, otherwise path C. |
 | `T_low` 4 hours or more, or no `max_slots` and `T_high` 4 hours or more | Path C (section 4). |
 
-Tell the owner `F` in slot-hours, `T_low` and `T_high`, and the path, and
-record them. Assumptions that were not measured, to name with the estimate:
+Tell the owner `F` in slot-hours (with the factor 2, and the expected cost
+without it), `T_low` and `T_high`, and the path, and record them. Assumptions that were not measured, to name with the estimate:
 
 - The time grows linearly with the bytes. The sample is about 1,000 times
   smaller than the table; the sort of a clustered multi-TiB copy can grow
@@ -870,8 +896,9 @@ Count the rows per partition of the new layout:
 kbagent --json workspace query --project ALIAS --workspace-id WS_ID --full --sql "SELECT PART_OLD AS p, COUNT(*) AS n FROM T GROUP BY p ORDER BY p"
 ```
 
-`--full` returns every row: the default stops at 500. A row with `p` NULL is
-the NULL partition.
+`--full` returns every row: the default stops at 500. The rows are in
+`csv_data`, not in `rows` (section 0). A row with `p` NULL is the NULL
+partition.
 
 A range is a run of consecutive partitions from this list, half-open: it
 holds the rows with `START <= PART_OLD < END`. `START` is the first partition of
@@ -1240,7 +1267,8 @@ that table:
 
 Rows with NULL in `COL` form one group with `p` NULL on each table, and the
 query compares the two groups like any other partition. An empty result
-passes.
+passes: `csv_data` of the last statement holds the header line alone
+(section 0). A missing `csv_data` does not pass.
 
 Right before the swap, count the rows of both tables once more with the
 count query at the top of this section. It is the last command before the
