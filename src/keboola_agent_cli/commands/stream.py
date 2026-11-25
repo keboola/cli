@@ -29,6 +29,7 @@ from ._helpers import (
     get_formatter,
     get_service,
     map_error_to_exit_code,
+    structured_input,
 )
 from ._project_ref import PROJECT_HELP
 
@@ -183,7 +184,20 @@ def stream_create_source(
     no_sinks: bool = typer.Option(
         False,
         "--no-sinks",
-        help="Skip auto-creating the logs/metrics/traces sinks for an OTLP source",
+        help="Create a bare source without Storage table sinks",
+    ),
+    table_id: str | None = typer.Option(
+        None,
+        "--table-id",
+        help="HTTP destination table (default: in.c-data-stream-<source_id>.events)",
+    ),
+    columns: str | None = typer.Option(
+        None,
+        "--columns",
+        help='HTTP table columns as a JSON array, e.g. [{"name":"user_id","type":"path","path":"user.id"}]',
+    ),
+    columns_file: str | None = typer.Option(
+        None, "--columns-file", help="Read HTTP column definitions from a JSON file (- for stdin)"
     ),
     reveal: bool = typer.Option(False, "--reveal", help="Print the full endpoint incl. secret"),
 ) -> None:
@@ -191,9 +205,16 @@ def stream_create_source(
 
     For an OTLP source the three standard sinks (logs/metrics/traces) are
     auto-created so data lands in Storage (bucket in.c-otlp-<source>); pass
-    --no-sinks to create a bare source without them.
+    --no-sinks to create a bare source without them. HTTP sources get one table
+    sink, defaulting to id (uuid), datetime, ip, body and headers columns.
     """
     formatter = get_formatter(ctx)
+    try:
+        parsed_columns = structured_input(columns, columns_file, label="columns")
+    except ValueError as exc:
+        formatter.error(error_code=ErrorCode.INVALID_ARGUMENT, message=str(exc))
+        raise typer.Exit(code=2) from None
+    _validate_http_options(source_type, no_sinks, table_id, parsed_columns)
     report_branch_ref(ctx.obj["config_store"], project, branch)
     service = get_service(ctx, "stream_service")
     try:
@@ -205,10 +226,37 @@ def stream_create_source(
             if_not_exists=if_not_exists,
             reveal=reveal,
             provision_sinks=not no_sinks,
+            table_id=table_id,
+            columns=parsed_columns,
         )
     except (ConfigError, KeboolaApiError) as exc:
         _handle_errors(formatter, exc)
     formatter.output(result, _format_detail)
+
+
+def _validate_http_options(
+    source_type: SourceType, no_sinks: bool, table_id: str | None, columns: Any
+) -> None:
+    if source_type != SourceType.http and (table_id is not None or columns is not None):
+        raise typer.BadParameter("--table-id and --columns apply only to HTTP sources.")
+    if no_sinks and (table_id is not None or columns is not None):
+        raise typer.BadParameter("--table-id and --columns cannot be combined with --no-sinks.")
+    if table_id is not None and not table_id.strip():
+        raise typer.BadParameter("--table-id must not be empty.")
+    if columns is not None and (
+        not isinstance(columns, list)
+        or any(
+            not isinstance(col, dict)
+            or not isinstance(col.get("name"), str)
+            or not col["name"].strip()
+            or col.get("type")
+            not in ("uuid", "datetime", "ip", "body", "headers", "path", "template")
+            for col in columns
+        )
+    ):
+        raise typer.BadParameter(
+            "--columns must be a JSON array of column objects with name and type."
+        )
 
 
 @stream_app.command("detail")

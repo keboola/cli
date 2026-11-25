@@ -2401,6 +2401,9 @@ remain branch-aware because modifying a dev branch is the expected intent.
     Create an OTLP (default) or HTTP source; polls the async task and returns the endpoint.
     For OTLP, auto-provisions the logs/metrics/traces sinks (bucket in.c-otlp-<source>) so data
     lands in Storage (idempotent; --no-sinks for a bare source).
+    HTTP creates one sink in in.c-data-stream-<source_id>.events; --table-id overrides it.
+    --columns JSON / --columns-file PATH (- for stdin) sets HTTP columns; omitted or [] uses
+    id (uuid), datetime, ip, body, headers. These options are HTTP-only, incompatible with --no-sinks.
     --if-not-exists returns an existing same-named source as status=skipped.
   stream detail
     Takes --source-id ID or --name NAME (the positional SOURCE_ID is removed since 1.0.0).

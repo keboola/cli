@@ -908,7 +908,7 @@ kbagent storage unload-table [--project NAME] --table-id ID [--column COL ...] [
 # with the secret in the path -- MASKED by default, --reveal to print it. create-source --type otlp
 # auto-provisions the logs/metrics/traces sinks (bucket in.c-otlp-<source>) so data lands; --no-sinks opts out.
 kbagent stream list [--project NAME] [--branch ID]
-kbagent stream create-source [--project NAME] --name NAME [--type otlp|http] [--branch ID] [--if-not-exists] [--no-sinks] [--reveal]
+kbagent stream create-source [--project NAME] --name NAME [--type otlp|http] [--table-id ID] [--columns JSON | --columns-file PATH] [--branch ID] [--if-not-exists] [--no-sinks] [--reveal]
 kbagent stream detail [--source-id ID | --name NAME] [--project NAME] [--branch ID] [--reveal]
 kbagent stream delete --source-id ID [--project NAME] [--branch ID] [--dry-run] [--yes]
 

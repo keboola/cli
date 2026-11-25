@@ -116,6 +116,17 @@ class TestDetail:
         assert result["signal_endpoints"]["logs"] == f"{FULL_URL}/v1/logs"
         assert result["source"]["otlp"]["secret"] == SECRET
 
+    def test_http_detail_masks_secret(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.get_source.return_value = {
+            "sourceId": "http",
+            "type": "http",
+            "http": {"url": f"https://stream-in/http/{SECRET}", "secret": SECRET},
+        }
+        result = _svc(store, factory).get_source_detail(alias=ALIAS, source_id="http")
+        assert SECRET not in str(result)
+        assert result["source"]["http"]["secret"] == "***"
+
     def test_detail_destination_from_sinks(self, store, client_factory) -> None:
         factory, mock = client_factory
         mock.get_source.return_value = SOURCE
@@ -171,13 +182,14 @@ class TestCreate:
         assert mock.wait_for_task.call_count == 4
         mock.get_source.assert_called_once_with("default", "my-otlp")
 
-    def test_create_no_sinks_skips_provisioning(self, store, client_factory) -> None:
+    @pytest.mark.parametrize("source_type", ["otlp", "http"])
+    def test_create_no_sinks_skips_provisioning(self, store, client_factory, source_type) -> None:
         factory, mock = client_factory
         mock.create_source.return_value = {"taskId": "t1", "isFinished": False}
         mock.wait_for_task.return_value = {"isFinished": True, "outputs": {"sourceId": "my-otlp"}}
         mock.get_source.return_value = SOURCE
         result = _svc(store, factory).create_source(
-            alias=ALIAS, name="my-otlp", provision_sinks=False
+            alias=ALIAS, name="my-otlp", source_type=source_type, provision_sinks=False
         )
         assert result["status"] == "created"
         mock.create_sink.assert_not_called()
@@ -199,13 +211,56 @@ class TestCreate:
         assert mock.create_sink.call_count == 1
         assert mock.create_sink.call_args.kwargs["table_id"] == "in.c-otlp-my-otlp.metrics"
 
-    def test_http_source_skips_sink_provisioning(self, store, client_factory) -> None:
+    @pytest.mark.parametrize(
+        "columns", [None, [], [{"name": "user", "type": "path", "path": "user.id"}]]
+    )
+    @pytest.mark.parametrize("table_id", [None, "in.c-webhooks.events"])
+    def test_http_source_provisions_sink(self, store, client_factory, columns, table_id) -> None:
         factory, mock = client_factory
         mock.create_source.return_value = {"taskId": "t1", "isFinished": False}
         mock.wait_for_task.return_value = {"isFinished": True, "outputs": {"sourceId": "my-http"}}
         mock.get_source.return_value = {"sourceId": "my-http", "type": "http", "http": {}}
-        _svc(store, factory).create_source(alias=ALIAS, name="my-http", source_type="http")
-        mock.create_sink.assert_not_called()
+        _svc(store, factory).create_source(
+            alias=ALIAS, name="my-http", source_type="http", columns=columns, table_id=table_id
+        )
+        mock.create_sink.assert_called_once_with(
+            "default",
+            "my-http",
+            name="my-http",
+            table_id=table_id or "in.c-data-stream-my-http.events",
+            columns=columns
+            or [
+                {"name": "id", "type": "uuid"},
+                {"name": "datetime", "type": "datetime"},
+                {"name": "ip", "type": "ip"},
+                {"name": "body", "type": "body"},
+                {"name": "headers", "type": "headers"},
+            ],
+        )
+        assert mock.wait_for_task.call_count == 2
+
+    @pytest.mark.parametrize(
+        "sinks", [[], [{"table": {"tableId": "in.c-data-stream-my-http.events"}}]]
+    )
+    def test_http_if_not_exists_reconciles(self, store, client_factory, sinks) -> None:
+        factory, mock = client_factory
+        mock.list_sources.return_value = {"sources": [{"sourceId": "my-http", "type": "http"}]}
+        mock.list_sinks.return_value = {"sinks": sinks}
+        result = _svc(store, factory).create_source(
+            alias=ALIAS, name="my-http", source_type="http", if_not_exists=True
+        )
+        assert result["status"] == "skipped"
+        assert mock.create_sink.call_count == (0 if sinks else 1)
+        mock.create_source.assert_not_called()
+
+    def test_http_sink_failure_propagates_and_closes(self, store, client_factory) -> None:
+        factory, mock = client_factory
+        mock.wait_for_task.return_value = {"outputs": {"sourceId": "s"}}
+        mock.get_source.return_value = {"sourceId": "s", "type": "http"}
+        mock.create_sink.side_effect = KeboolaApiError(message="Sink failed")
+        with pytest.raises(KeboolaApiError, match="Sink failed"):
+            _svc(store, factory).create_source(alias=ALIAS, name="s", source_type="http")
+        mock.close.assert_called_once()
 
     def test_if_not_exists_skips(self, store, client_factory) -> None:
         factory, mock = client_factory

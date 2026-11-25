@@ -1365,7 +1365,7 @@ Data Streams (OTLP) source management
 
   kbagent stream create-source [--project PROJECT] --name NAME
       [--type otlp|http] [--branch BRANCH] [--if-not-exists] [--no-sinks]
-      [--reveal]
+      [--table-id ID] [--columns COLUMNS] [--columns-file FILE] [--reveal]
     Create an OTLP (or HTTP) source and return its endpoint.
 
   kbagent stream delete [--project PROJECT] --source-id ID [--branch BRANCH]

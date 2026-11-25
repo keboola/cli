@@ -22,6 +22,7 @@ generated, authoritative list).
 |---|---|---|
 | `add_config_row` | `kbagent config row-create` | |
 | `create_config` | `kbagent config new` | use `--push` for one-shot remote create |
+| `create_stream` | `kbagent stream create-source --type http` | Creates source + table sink; `--table-id` defaults to `in.c-data-stream-<source_id>.events`. `--columns` JSON / `--columns-file` defines columns; omitted or empty defaults to id (uuid), datetime, ip, body, headers, matching MCP 75e7fc4. CLI still defaults to OTLP; `--no-sinks` preserves bare-source creation. |
 | `create_sql_transformation` | `kbagent transformation create` | |
 | `get_components` | `kbagent component list` | or `component detail` |
 | `get_config_examples` | `kbagent config examples` | |
