@@ -57,19 +57,27 @@ of the workspace service account as `gcp_project`. Check it before any other
 `bq` command: `bq --project_id=GCP_PROJECT show DATASET.T` must find the
 table, and `tableReference.datasetId` in its output must equal `DATASET`.
 
-A `workspace query` with `--full` returns its result only as CSV text with a
-header line, in `data.statements[].csv_data`. It has no `columns` and no
-`rows`: a filter that reads `rows` sees nothing for every `--full` query, and
-a check that expects an empty result then passes whatever the data. Read the
-result of the last statement with:
+A `workspace query` with `--full` returns the rows of a statement only as CSV
+text with a header line, in `data.statements[].csv_data`. It has no `columns`
+and no `rows`: a filter that reads `rows` sees nothing for every `--full`
+query, and a check that expects an empty result then passes whatever the
+data. Read the last statement with:
 
 ```bash
-kbagent --json workspace query --project ALIAS --workspace-id WS_ID --full --sql "SELECT 1 AS x" | jq -r '.data.statements[-1].csv_data'
+kbagent --json workspace query --project ALIAS --workspace-id WS_ID --full --sql "SELECT 1 AS x" | jq '.data.statements[-1] | {status, rows_affected, csv_data}'
 ```
 
-An empty result is the header line alone. A `csv_data` that is missing or
-null is not an empty result: kbagent could not fetch the result. Run the
-query again, and never pass a check on it.
+`rows_affected` is the number of rows of the result. kbagent fetches the rows
+only when it is above 0, so an empty result has no `csv_data` key at all,
+with or without `--full`. A check that expects an empty result:
+
+- **passes** when the envelope is a success, `status` is `completed` and
+  `rows_affected` is 0. `csv_data` is then null.
+- **fails** when the envelope is an error, when `status` is not `completed`,
+  or when `rows_affected` is above 0. With rows, `csv_data` holds the header
+  and the rows that the check found. When `rows_affected` is above 0 and
+  `csv_data` is null, kbagent could not fetch the rows: the check still
+  fails; run the query again to see them.
 
 A `bq` command that ends with "not found" or with a permission error has read
 nothing. It does not mean that there is nothing to carry. Treat the objects
@@ -472,7 +480,7 @@ per job. So it binds the copy, and it also binds the output-mapping load of
 path B (section 4), which is a full load into the partitioned table. On path C
 it binds each range: a range covers at most 4,000 partitions.
 
-## 2a. Size check: path A or path C (tables over 5 TiB)
+## 2a. Size check: path A or path C (tables over 5 TiB, or on the owner's request)
 
 Run this section when `data_size_bytes` is over 5 TiB (5,497,558,138,880
 bytes), or when the owner asks for it for a smaller table. It decides whether one path A copy finishes in
@@ -897,8 +905,10 @@ kbagent --json workspace query --project ALIAS --workspace-id WS_ID --full --sql
 ```
 
 `--full` returns every row: the default stops at 500. The rows are in
-`csv_data`, not in `rows` (section 0). A row with `p` NULL is the NULL
-partition.
+`csv_data` of the last statement, not in `rows`, and `rows_affected` counts
+them (section 0). When `rows_affected` is above 0 and `csv_data` is null, the
+rows were not fetched: run the query again. A row with `p` NULL (an empty
+first field) is the NULL partition.
 
 A range is a run of consecutive partitions from this list, half-open: it
 holds the rows with `START <= PART_OLD < END`. `START` is the first partition of
@@ -1267,8 +1277,10 @@ that table:
 
 Rows with NULL in `COL` form one group with `p` NULL on each table, and the
 query compares the two groups like any other partition. An empty result
-passes: `csv_data` of the last statement holds the header line alone
-(section 0). A missing `csv_data` does not pass.
+passes: the last statement has `status` `completed` and `rows_affected` 0,
+and no `csv_data` (section 0, with its filter). An error, another status, or
+`rows_affected` above 0 fails the check; `csv_data` then lists the partitions
+that differ.
 
 Right before the swap, count the rows of both tables once more with the
 count query at the top of this section. It is the last command before the
