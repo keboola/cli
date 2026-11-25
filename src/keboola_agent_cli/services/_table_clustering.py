@@ -61,7 +61,8 @@ def _can_skip_write(table: dict[str, Any], before: list[str] | None) -> bool:
         return False
     if before is not None:
         return True
-    bucket = table.get("bucket") if isinstance(table.get("bucket"), dict) else {}
+    raw_bucket = table.get("bucket")
+    bucket = raw_bucket if isinstance(raw_bucket, dict) else {}
     return (
         bool(table.get("isTyped"))
         and str(bucket.get("backend") or "").lower() == "bigquery"
