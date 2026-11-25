@@ -74,7 +74,9 @@ Ask the operator for every input before any write. Do not guess one.
 1. Project alias.
 2. Table ID.
 3. Partition column. None for a cluster-only table.
-4. Granularity. The runbook decides it in section 2 from the data.
+4. Granularity. The runbook gives the default in section 2 from the data
+   (DAY when the table has at most 4,000 day partitions). The owner may
+   choose a coarser one (MONTH, YEAR).
 5. Clustering columns, at most 4, in order.
 6. Primary key of the table.
 7. The owner who pauses and resumes the writers.
