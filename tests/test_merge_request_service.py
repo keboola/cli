@@ -135,6 +135,11 @@ class TestDeriveMergeBlockers:
         mr = _mr("development", mergeBlockers=["approvals"])
         assert derive_merge_blockers(mr, conflicts=[]) == ["approvals"]
 
+    def test_unknown_or_missing_state_is_never_mergeable(self) -> None:
+        # Parity with the MCP server: when unsure, the answer is "not mergeable".
+        assert derive_merge_blockers(_mr("some_future_state"), conflicts=[]) == ["state"]
+        assert derive_merge_blockers({"id": 7}, conflicts=[]) == ["state"]
+
     def test_server_list_is_unioned_with_live_conflicts(self) -> None:
         # DMD-3050: the server's list must not hide a conflict the live list shows.
         conflicts = [{"componentId": "c", "configurationId": "1"}]
@@ -395,6 +400,15 @@ class TestGetMergeRequest:
         assert detail["merge_blockers"] == ["state"]
         assert detail["mergeable"] is False
         assert "conflicts" not in detail
+
+    def test_unknown_state_is_never_mergeable(self, store, client_factory) -> None:
+        # DMD-2246: a raw state kbagent does not know never reads as mergeable.
+        factory, mock = client_factory
+        mock.merge_requests.get.return_value = _wire_mr(7, "some_future_state")
+        mock.merge_requests.conflicts.return_value = []
+        detail = _svc(store, factory).get_merge_request(ALIAS, 7)
+        assert detail["merge_blockers"] == ["state"]
+        assert detail["mergeable"] is False
 
     def test_server_blockers_empty_but_live_conflicts_is_not_mergeable(
         self, store, client_factory
@@ -686,12 +700,43 @@ class TestMerge:
         factory, mock = client_factory
         mock.merge_requests.get.side_effect = [
             _wire_mr(7, "approved"),
-            _wire_mr(7, "in_merge"),
+            _wire_mr(7, "approved"),
         ]
         mock.merge_requests.merge.side_effect = self._not_ready()
         with pytest.raises(KeboolaApiError) as exc_info:
             _svc(store, factory).merge(ALIAS, 7)
         assert exc_info.value.error_code == ErrorCode.MR_NOT_READY_TO_MERGE
+
+    def test_not_ready_while_the_merge_runs_says_the_merge_is_running(
+        self, store, client_factory, monkeypatch
+    ) -> None:
+        """A merge that started (lost response, a concurrent call, the auto-merge
+        scheduler) is reported as MR_MERGE_RUNNING -- not a refusal, not a success:
+        exit 0 means merged, and the running merge can still fail, so no local
+        cleanup runs either (DMD-2246)."""
+        factory, mock = client_factory
+        mock.merge_requests.get.side_effect = [
+            _wire_mr(7, "approved", branch_from=123),
+            _wire_mr(7, "in_merge", branch_from=123),
+        ]
+        mock.merge_requests.merge.side_effect = self._not_ready()
+        unlinked: list[int] = []
+        monkeypatch.setattr(
+            "keboola_agent_cli.sync.branch_mapping.cleanup_branch_id_from_mapping",
+            unlinked.append,
+        )
+        store.set_project_branch(ALIAS, 123)
+        with pytest.raises(KeboolaApiError) as exc_info:
+            _svc(store, factory).merge(ALIAS, 7)
+        exc = exc_info.value
+        assert exc.error_code == ErrorCode.MR_MERGE_RUNNING
+        assert exc.retryable is False
+        assert "already being merged" in exc.message
+        assert exc.details["state"] == "in_merge"
+        assert exc.details["derived_state"] == "in_merge"
+        mock.merge_requests.merge.assert_called_once()
+        assert store.get_project(ALIAS).active_branch_id == 123
+        assert unlinked == []
 
     def test_not_ready_with_a_failed_read_reports_the_409(self, store, client_factory) -> None:
         factory, mock = client_factory

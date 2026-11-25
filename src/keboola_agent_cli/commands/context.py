@@ -1328,9 +1328,11 @@ explicit Storage config version, never the empty shell the create writes.
   that can observe and shape merge requests but never move one. Under --json every
   destructive command requires an explicit target (--merge-request-id or --branch).
   Errors: FEATURE_NOT_ENABLED (exit 5) from any command whose target was resolved implicitly
-  on a project without the feature; MR_MERGE_CONFLICT / MR_NOT_READY_TO_MERGE from merge;
+  on a project without the feature; MR_MERGE_CONFLICT / MR_NOT_READY_TO_MERGE / MR_MERGE_RUNNING from merge;
   a scoped token 403s on everything but list. Every result may carry warnings[].
-  A merge repeated after an earlier merge already landed answers status "already_merged", exit 0.
+  A merge repeated after an earlier merge already landed answers status "already_merged", exit 0;
+  repeated while that merge still runs, it answers MR_MERGE_RUNNING (exit 4): do not merge
+  again, poll `merge-request detail`.
 """,
     "notification": """\
 #### Notification Subscriptions (Flow Notifications Tab)

@@ -499,7 +499,7 @@ Shape of the success envelope in 1.0.0 (`storage delete-table --project prod`, a
 | 1 | General failure, or a partial failure: at least one item or project failed (E4). |
 | 2 | Usage or validation error, or a refused confirmation (`CONFIRMATION_REQUIRED`, from 1.0.0). |
 | 3 | Authentication error. |
-| 4 | Network error, or a local wait that timed out while the server job keeps running. |
+| 4 | Network error, a local wait that timed out while the server job keeps running, or an operation that is already running on the server (`MR_MERGE_RUNNING`). |
 | 5 | Configuration error, for example no project resolves (`CONFIG_ERROR`). |
 | 6 | Denied by a permission policy, or a refused random-code confirmation. |
 | 7 | The job was terminated after its timeout (`JOB_TIMEOUT_TERMINATED`). |
@@ -615,7 +615,7 @@ A flag that raises the class is in `FLAG_ESCALATIONS` and is checked where the f
 - Checked by: review and unit tests.
 
 <a id="R3"></a>
-**R3 · MUST · now.** POST and PATCH are not repeated after a 5xx or a read timeout. PUT and DELETE are repeated, unless the endpoint is a state transition or changes meaning after success (`retry_safe=False`). When `merge-request merge` gets `MR_NOT_READY_TO_MERGE`, it reads the merge request: if it is merged, the command runs the local cleanup and returns `already_merged` with exit 0.
+**R3 · MUST · now.** POST and PATCH are not repeated after a 5xx or a read timeout. PUT and DELETE are repeated, unless the endpoint is a state transition or changes meaning after success (`retry_safe=False`). When `merge-request merge` gets `MR_NOT_READY_TO_MERGE`, it reads the merge request: if it is merged, the command runs the local cleanup and returns `already_merged` with exit 0; if it is `in_merge`, the command answers `MR_MERGE_RUNNING` (exit 4, not retryable) and runs no cleanup.
 
 - Checked by: review and unit tests.
 

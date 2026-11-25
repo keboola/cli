@@ -181,6 +181,10 @@ class ErrorCode(StrEnum):
     # knows the 409 came from the merge endpoint.
     MR_NOT_READY_TO_MERGE = "MR_NOT_READY_TO_MERGE"
     MR_MERGE_CONFLICT = "MR_MERGE_CONFLICT"
+    # A not-ready 409 whose re-read MR is `in_merge`: a merge started earlier
+    # (lost response, a concurrent call, the auto-merge scheduler) still runs.
+    # Neither a refusal nor a success (DMD-2246); exit 4 like STORAGE_JOB_TIMEOUT.
+    MR_MERGE_RUNNING = "MR_MERGE_RUNNING"
 
     # Updates (#791, CLI-51). After an automatic update to a higher major the
     # first write or destructive command is refused once (exit 6). Reads before
@@ -422,8 +426,9 @@ ERROR_TYPES: frozenset[str] = frozenset(
 # Spec rule E1 (docs/cli-interface-spec.md#E1): every ErrorCode has one entry,
 # and `map_error_to_exit_code` reads the exit code from here. The exit codes
 # follow the table in docs/cli-interface-spec.md#exit-codes: 1 general, 2 usage
-# or validation, 3 authentication, 4 network or a local wait that timed out, 5
-# configuration, 6 permission policy, 7 job terminated after its timeout.
+# or validation, 3 authentication, 4 network, a local wait that timed out or an
+# operation already running on the server, 5 configuration, 6 permission
+# policy, 7 job terminated after its timeout.
 # docs/error-codes.md lists the same pairs, and `scripts/check_error_codes.py`
 # fails when a code has no entry or the doc disagrees with this table.
 # An entry's exit keeps the code's existing behavior, and its type is the
@@ -558,6 +563,7 @@ ERROR_CODE_TABLE: dict[str, ErrorClass] = {
     # Merge requests
     ErrorCode.MR_NOT_READY_TO_MERGE: ErrorClass("conflict", 1),
     ErrorCode.MR_MERGE_CONFLICT: ErrorClass("conflict", 1),
+    ErrorCode.MR_MERGE_RUNNING: ErrorClass("conflict", 4),
     # Interrupted under --json: Ctrl+C exits 130 (an aborted prompt keeps Typer's exit 1).
     ErrorCode.INTERRUPTED: ErrorClass("api", 130),
 }
