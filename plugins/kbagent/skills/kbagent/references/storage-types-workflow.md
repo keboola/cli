@@ -308,6 +308,14 @@ Rules:
 
 ## BigQuery repartition via `create-table --source-table-id`
 
+**For a production table, do not run the two commands below on their own.**
+Follow the sibling skill
+[kbagent-bigquery-repartition](../../kbagent-bigquery-repartition/SKILL.md):
+it adds the preflight of the security objects (policy tags, table IAM
+bindings, row access policies, search indexes), the validation before the
+swap, the rollback and the recovery of a half-moved swap. This section
+describes the two building blocks and their flags.
+
 On **BigQuery** you can produce the repartitioned/re-clustered copy in a
 single call instead of hand-writing a CTAS transformation: `create-table`
 copies an existing table's data into a new partition/clustering layout,
