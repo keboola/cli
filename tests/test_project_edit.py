@@ -37,6 +37,20 @@ def _make_service(tmp_config_dir: Path, alias: str = "prod") -> ProjectService:
     )
 
 
+def test_token_dry_run_does_not_verify_or_warn(tmp_config_dir: Path) -> None:
+    store = setup_single_project(tmp_config_dir)
+    client = make_mock_client()
+    service = ProjectService(config_store=store, client_factory=lambda url, token: client)
+
+    result = service.edit_project(alias="prod", token="replacement-token", dry_run=True)
+
+    assert "warnings" not in result
+    client.verify_token.assert_not_called()
+    stored = store.get_project("prod")
+    assert stored is not None
+    assert stored.token != "replacement-token"
+
+
 # ---------------------------------------------------------------------------
 # config.json: dict-key swap + default_project cascade
 # ---------------------------------------------------------------------------
@@ -552,7 +566,7 @@ class TestEditTokenOnSessionProject:
         assert project is not None
         assert project.token == self.NEW_TOKEN
 
-        assert len(result["warnings"]) == 1
+        assert len(result["warnings"]) == 2
         warning = result["warnings"][0]
         assert self.SESSION_ALIAS in warning
         assert "auth logout --remove-projects" in warning
@@ -573,12 +587,13 @@ class TestEditTokenOnSessionProject:
         assert project is not None
         assert project.token == make_session_token(self.SESSION_PROJECT_ID)
 
-    def test_static_project_carries_no_warnings_key(self, tmp_config_dir: Path) -> None:
+    def test_static_project_warns_about_non_master_token(self, tmp_config_dir: Path) -> None:
         service = self._service(tmp_config_dir)
 
         result = service.edit_project(alias="static-proj", token=self.NEW_TOKEN)
 
-        assert "warnings" not in result
+        assert len(result["warnings"]) == 1
+        assert "not a master token" in result["warnings"][0]
 
     def test_url_only_edit_on_session_project_carries_no_warnings_key(
         self, tmp_config_dir: Path

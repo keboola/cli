@@ -5213,8 +5213,13 @@ requires a **master (admin) token** — `canManageTokens` alone is not enough
   (`kbagent project edit --project <ALIAS> --token-stdin`) or open
   the OAuth flow via the Keboola UI instead.
 - AI agents creating the project token via `kbagent project add` /
-  `kbagent project refresh` get a non-master token by default — they must
-  switch to a master token before calling `config oauth-url`. Granting the
+  `kbagent project refresh` must distinguish supplied and minted tokens:
+  `project add` and `project edit` keep the supplied token and warn without failing when it
+  is non-master (since vNEXT). The warning goes to stderr, or the top-level
+  JSON `warnings[]` (also `data.warnings`). Obtain a master Storage API token
+  from the Keboola UI for `config oauth-url` and `token create`.
+  `project refresh` mints non-master tokens despite `canManageTokens=true`;
+  it does NOT upgrade them to master tokens. Granting the
   minted token `canManageTokens` would NOT help: issue #599 established the
   Storage API rejects a non-admin token carrying that flag with a 500
   (`CreateTokenVoter` "impossible state"), so a master token is the only

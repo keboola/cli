@@ -279,6 +279,9 @@ class TokenVerifyResponse(BaseModel):
 
     token_id: str = Field(description="Token identifier")
     token_description: str = Field(description="Human-readable token description")
+    is_master_token: bool = Field(
+        default=False, description="Whether this is a master Storage token"
+    )
     project_id: int | None = Field(default=None, description="Keboola project numeric ID")
     project_name: str = Field(description="Keboola project name")
     owner_name: str = Field(description="Project owner name")

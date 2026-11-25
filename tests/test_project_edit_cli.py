@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from typer.testing import CliRunner
 
 from helpers import make_mock_client
@@ -27,6 +28,48 @@ from keboola_agent_cli.services.project_service import ProjectService
 TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 
 runner = CliRunner()
+
+
+@pytest.mark.parametrize("master", [True, False])
+@pytest.mark.parametrize("json_mode", [True, False])
+def test_edit_non_master_warning(tmp_path: Path, master: bool, json_mode: bool) -> None:
+    client = make_mock_client()
+    client.verify_token.return_value.is_master_token = master
+    store = ConfigStore(config_dir=tmp_path)
+    store.add_project(
+        "prod",
+        ProjectConfig(stack_url="https://connection.keboola.com", token=TEST_TOKEN),
+    )
+    service = ProjectService(config_store=store, client_factory=lambda url, token: client)
+    with (
+        patch("keboola_agent_cli.cli.ConfigStore", return_value=store),
+        patch("keboola_agent_cli.cli.ProjectService", return_value=service),
+    ):
+        result = runner.invoke(
+            app,
+            (["--json"] if json_mode else [])
+            + ["project", "edit", "--project", "prod", "--token", TEST_TOKEN],
+        )
+    assert result.exit_code == 0, result.output
+    stored = store.get_project("prod")
+    assert stored is not None
+    assert stored.token == TEST_TOKEN
+    if json_mode:
+        payload = json.loads(result.stdout)
+        assert result.stderr == ""
+        if master:
+            assert "warnings" not in payload
+            assert "warnings" not in payload["data"]
+        else:
+            add_result = service.add_project("other", "https://connection.keboola.com", TEST_TOKEN)
+            expected = add_result["warnings"][0].replace("'other'", "'prod'")
+            assert payload["warnings"] == [{"code": "WARNING", "message": expected}]
+            assert payload["data"]["warnings"] == [expected]
+    elif master:
+        assert result.stderr == ""
+    else:
+        assert "not a master token" in " ".join(result.stderr.split())
+        assert "not a master token" not in result.stdout
 
 
 def _setup_runner(config_dir: Path):
@@ -331,8 +374,9 @@ class TestProjectEditTokenOnSessionProject:
         assert result.exit_code == 0, result.output
         payload = json.loads(result.stdout)
         assert payload["status"] == "ok"
-        assert len(payload["data"]["warnings"]) == 1
+        assert len(payload["data"]["warnings"]) == 2
         assert "auth logout --remove-projects" in payload["data"]["warnings"][0]
+        assert "not a master token" in payload["data"]["warnings"][1]
 
 
 class TestProjectEditTokenSources:
