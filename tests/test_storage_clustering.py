@@ -22,6 +22,7 @@ TEST_TOKEN = "901-55555-fakeTestTokenDoNotUseXXXXXXXX"
 STACK = "https://connection.keboola.com"
 TABLE = "in.c-b.t"
 DEFINITION_URL = f"{STACK}/v2/storage/branch/default/tables/{TABLE}/definition"
+DEFAULT_BRANCH_ID = 100
 
 
 def _make_store(tmp_path: Path) -> ConfigStore:
@@ -47,6 +48,10 @@ def _client(before: list[str] | None, after: list[str] | None = None, **kw: Any)
     client = MagicMock()
     client.get_table_detail.side_effect = [_table(before, **kw), _table(after)]
     client.update_table_definition.return_value = {"id": 555, "status": "success"}
+    client.list_dev_branches.return_value = [
+        {"id": 7, "isDefault": False},
+        {"id": str(DEFAULT_BRANCH_ID), "isDefault": True},
+    ]
     return client
 
 
@@ -141,10 +146,15 @@ class TestClusteringService:
     def test_set_returns_updated_job_id_and_post_read_clustering(self, tmp_path: Path) -> None:
         client = _client(["x"], ["a", "b"])
         result = self._run(tmp_path, client, fields=["a", "b"])
-        assert result["status"] == "updated"
-        assert result["job_id"] == 555
-        assert result["clustering_before"] == ["x"]
-        assert result["clustering"] == ["a", "b"]
+        # Only the documented keys: no job result (table detail, actor e-mail), no warnings key.
+        assert result == {
+            "table_id": TABLE,
+            "branch_id": DEFAULT_BRANCH_ID,
+            "clustering_before": ["x"],
+            "clustering": ["a", "b"],
+            "status": "updated",
+            "job_id": 555,
+        }
         client.update_table_definition.assert_called_once_with(
             TABLE,
             clustering=["a", "b"],
@@ -160,13 +170,28 @@ class TestClusteringService:
         assert result["branch_id"] == 7
         assert [c.kwargs["branch_id"] for c in client.get_table_detail.call_args_list] == [7, 7]
         assert client.update_table_definition.call_args.kwargs["branch_id"] == 7
+        client.list_dev_branches.assert_not_called()
+
+    def test_default_branch_lookup_failure_leaves_branch_id_null(self, tmp_path: Path) -> None:
+        client = _client(None, ["a"])
+        client.list_dev_branches.side_effect = KeboolaApiError(
+            message="Bad gateway", status_code=502, error_code=ErrorCode.API_ERROR
+        )
+        result = self._run(tmp_path, client, fields=["a"])
+        assert result["status"] == "updated"
+        assert result["branch_id"] is None
 
     def test_same_fields_is_unchanged_without_put(self, tmp_path: Path) -> None:
         client = _client(["a", "b"])
         result = self._run(tmp_path, client, fields=["a", "b"])
-        assert result["status"] == "unchanged"
-        assert result["job_id"] is None
-        assert result["clustering"] == ["a", "b"]
+        assert result == {
+            "table_id": TABLE,
+            "branch_id": DEFAULT_BRANCH_ID,
+            "clustering_before": ["a", "b"],
+            "clustering": ["a", "b"],
+            "status": "unchanged",
+            "job_id": None,
+        }
         client.update_table_definition.assert_not_called()
 
     def test_clear_on_unclustered_table_is_unchanged(self, tmp_path: Path) -> None:
@@ -201,9 +226,8 @@ class TestClusteringService:
         result = self._run(tmp_path, client, fields=["a"], dry_run=True)
         assert result == {
             "dry_run": True,
-            "project_alias": "test",
             "table_id": TABLE,
-            "branch_id": None,
+            "branch_id": DEFAULT_BRANCH_ID,
             "clustering_before": before,
             "clustering": ["a"],
             "would_change": would_change,
@@ -280,15 +304,12 @@ class TestClusteringService:
 # ---------------------------------------------------------------------------
 
 UPDATED = {
-    "project_alias": "test",
     "table_id": TABLE,
-    "branch_id": None,
+    "branch_id": DEFAULT_BRANCH_ID,
     "clustering_before": None,
     "clustering": ["a", "b"],
     "status": "updated",
     "job_id": 555,
-    "result": {"id": 555},
-    "message": "Clustering set on table.",
 }
 
 
@@ -331,7 +352,7 @@ class TestClusteringCLI:
         )
 
     def test_json_unchanged(self, tmp_path: Path) -> None:
-        unchanged = {**UPDATED, "status": "unchanged", "job_id": None, "result": None}
+        unchanged = {**UPDATED, "status": "unchanged", "job_id": None}
         out, _ = _invoke(tmp_path, ["--clustering-field", "a", "--json"], result=unchanged)
         assert out.exit_code == 0, out.output
         assert json.loads(out.output)["data"]["status"] == "unchanged"
@@ -351,9 +372,8 @@ class TestClusteringCLI:
     def test_dry_run_json(self, tmp_path: Path) -> None:
         dry = {
             "dry_run": True,
-            "project_alias": "test",
             "table_id": TABLE,
-            "branch_id": None,
+            "branch_id": DEFAULT_BRANCH_ID,
             "clustering_before": ["c"],
             "clustering": ["a"],
             "would_change": True,

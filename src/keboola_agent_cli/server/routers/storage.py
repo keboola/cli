@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ...constants import FILE_DOWNLOAD_CHUNK_SIZE
+from ...models import ImportMethod
 from ...services.base import resolve_fanout_aliases
 from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_registry, require_permission
 
@@ -115,6 +116,8 @@ class LoadFileToTable(BaseModel):
     # it with GET /storage/jobs/{project}/{job_id}.
     wait: bool = True
     timeout: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    # Snowflake import method; `auto` (the platform default) sends nothing.
+    import_method: ImportMethod = ImportMethod.auto
 
 
 class SwapTables(BaseModel):
@@ -384,6 +387,7 @@ def upload_table(
     auto_create: bool = Form(True),
     wait: bool = Form(True),
     timeout: float | None = Form(None, gt=0, allow_inf_nan=False),
+    import_method: ImportMethod = Form(ImportMethod.auto),
     file: UploadFile = File(...),
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
@@ -413,6 +417,7 @@ def upload_table(
             branch_id=branch_id,
             wait=wait,
             timeout=timeout,
+            import_method=import_method,
         )
     finally:
         if tmp_path is not None:
@@ -817,6 +822,7 @@ def load_file_to_table(
         branch_id=body.branch_id,
         wait=body.wait,
         timeout=body.timeout,
+        import_method=body.import_method,
     )
 
 

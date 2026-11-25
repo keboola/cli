@@ -37,6 +37,18 @@ Placeholders used in every command:
 | `GCP_PROJECT` | Google Cloud project of the Keboola project |
 | `DATASET` | BigQuery dataset of bucket `B` |
 
+In the SQL of this runbook `T`, `T_repart`, `COL`, `PK`, `C1` and `OTHER`
+stand for identifiers. A name that is not a plain identifier (it contains a
+dash, or it is a reserved word such as `order`, `group` or `rows`) must be
+quoted with backticks in BigQuery. A backtick inside a double-quoted shell
+argument starts a command substitution, so pass such a query with
+`--sql-file PATH` (`workspace query`, `transformation create`) and never
+inside `--sql "..."`.
+
+For a STRING partition column the owner gives the date format string, an
+input of the skill. The default is `%Y-%m-%d`. Put it in place of
+`%Y-%m-%d` in every query.
+
 `DATASET` is in `sql_path` and `backend_path` of the table detail (section 1).
 `GCP_PROJECT` is the first segment of `sql_path` only when the path has three
 segments. Storage often leaves the project out, and then `sql_path` is
@@ -71,7 +83,7 @@ preflight record at the end of the section.
 
 ```bash
 kbagent --json storage table-detail --project ALIAS --table-id B.T \
-  | jq '.data | (.definition | if type=="object" then . else {} end) as $d | {is_alias, rows_count, data_size_bytes, primary_key, last_import_date, sql_path, backend_path, column_details, layout: ($d | {timePartitioning, rangePartitioning, clustering, requirePartitionFilter}), policy_tags: [($d.columns | if type=="array" then .[] else empty end) | {name, policyTagState}]}'
+  | jq '.data | (.definition | if type=="object" then . else {} end) as $d | {backend, is_alias, typed_columns: ([($d.columns | if type=="array" then .[] else empty end) | select((.definition | type) == "object" and .definition.type != null)] | length), rows_count, data_size_bytes, primary_key, last_import_date, sql_path, backend_path, column_details, layout: ($d | {timePartitioning, rangePartitioning, clustering, requirePartitionFilter}), policy_tags: [($d.columns | if type=="array" then .[] else empty end) | {name, policyTagState}]}'
 ```
 
 The filter prints `definition.requirePartitionFilter` as
@@ -81,11 +93,21 @@ an empty definition, mostly on untyped tables), or when `definition.columns`
 is not a list: `layout` then holds nulls and `policy_tags` is empty.
 
 Never print `definition.partitions`. It has one entry per physical partition
-and is unbounded.
+and is unbounded. Every other `storage table-detail` of this runbook drops
+it with `jq 'del(.data.definition.partitions)'`.
 
 Read from the result:
 
+- `backend`. Refuse the table when it is not `bigquery`.
 - `is_alias`. Refuse the table when it is true.
+- `typed_columns`: the number of columns that carry a native type in
+  `definition`. 0 means that the table is untyped. The table detail has no
+  other key that says so, and on an untyped table `column_details` is not a
+  schema: `native_type`, `nullable` and `length` are missing, or they are
+  hints that a component wrote to the column metadata (a hint can say `DATE`
+  on a column that BigQuery holds as STRING). So for an untyped table ignore
+  those three keys and record every column as `STRING`, nullable, without a
+  length and without a default. Sections 4b and 5 use the recorded values.
 - `rows_count`, `data_size_bytes`, `primary_key`, `last_import_date`.
 - `column_details[].native_type`: the type of every column. The type of `COL`
   decides the path. DATE, DATETIME or TIMESTAMP is path A. STRING is path B.
@@ -100,7 +122,8 @@ Read from the result:
   already DATE, DATETIME or TIMESTAMP, or the table is cluster only, it takes
   path B **without a type change** (section 4, path B).
 - `definition.timePartitioning`, `rangePartitioning`, `clustering`: the
-  current layout.
+  current layout. Record `timePartitioning.expirationMs` when it is set: the
+  copy does not inherit it (section 4).
 - `definition.requirePartitionFilter`. Refuse the table when it is true. Every
   query of this runbook (the partition-value profile, the row counts of
   sections 3 and 5) reads the whole table without a partition predicate, and
@@ -114,10 +137,21 @@ Read from the result:
   operator reads from BigQuery ("BigQuery-native objects" below).
 - `sql_path`: the BigQuery path of the table.
 
-Three refuse rules need only this result: the table is an alias,
-`requirePartitionFilter` is true, or `data_size_bytes` is over 5 TiB
-("Refuse rules" below). Check them now. A table that is refused here leaves
-nothing behind, because nothing was created yet.
+The table detail does not say whether the bucket is linked from another
+project: a table of a linked bucket has `is_alias: false`. Read the bucket:
+
+```bash
+kbagent --json storage bucket-detail --project ALIAS --bucket-id B | jq '.data | {backend, is_linked}'
+```
+
+Refuse the table when `is_linked` is true. A linked bucket is read-only in
+this project, so it cannot hold `T_repart`.
+
+Five refuse rules need only these two results: the backend is not BigQuery,
+the bucket is linked, the table is an alias, `requirePartitionFilter` is
+true, or `data_size_bytes` is over 5 TiB ("Refuse rules" below). Check them
+now. A table that is refused here leaves nothing behind, because nothing was
+created yet.
 
 ### Helper workspace
 
@@ -127,13 +161,25 @@ is the first object of this run in the project:
 
 ```bash
 kbagent --json workspace create --project ALIAS --name repartition-T \
-  | jq '{workspace_id: .data.workspace_id, gcp_project: (.data.user | fromjson | .project_id)}'
+  | jq 'if .data then {workspace_id: .data.workspace_id, gcp_project: (.data.user | fromjson | .project_id)} else {error} end'
 ```
 
 **Never run `workspace create` without this filter, and never print its
 response.** The response holds the key of the workspace service account
 (`data.user` is the key JSON, with `private_key`). The filter prints only
-`WS_ID` and `GCP_PROJECT`.
+`WS_ID` and `GCP_PROJECT`, or the error when the command failed.
+
+The same key is in the result of the `workspaceCreate` Storage job. When
+`workspace create` ends with `STORAGE_JOB_TIMEOUT`, never run `storage
+job-detail` on that job without a filter. Wait for it with:
+
+```bash
+kbagent --json storage job-detail --project ALIAS --job-id JOB_ID --wait | jq '.data | {status, error}'
+```
+
+Then find the workspace by its name with `workspace list --project ALIAS`,
+delete it, and run the filtered `workspace create` again: that is the only
+way to read `GCP_PROJECT` without printing the key.
 
 `workspace create` writes to the project, not to the table. It still waits
 for a yes.
@@ -214,11 +260,16 @@ kbagent --json sharing edges --project ALIAS
 kbagent --json project info --project ALIAS
 kbagent --json storage tables --project ALIAS --bucket-id B --include-usage
 kbagent --json flow list --project ALIAS --with-schedules
+kbagent --json schedule list --project ALIAS
 kbagent --json storage tables --project ALIAS
 ```
 
-- **Sharing.** Record every edge in which the bucket is the source. The
-  bucket detail has no `sharing` key, so the edges are the record.
+- **Sharing.** Record every edge in which the bucket is the source, and the
+  bucket's entry in `shared_buckets` of the same output: a bucket that is
+  shared but not linked yet has no edge. The bucket detail has no `sharing`
+  key, so this output is the record. It is empty, without an error, for a
+  project that kbagent holds without a project ID (`project list` shows
+  none): then ask the owner.
 - **Policy tags.** Look for the project feature `bigquery-policy-tags` in
   `features` of the project info. When any column carries a policy tag in
   BigQuery (the policy tags per column recorded in "BigQuery-native objects"
@@ -233,7 +284,15 @@ kbagent --json storage tables --project ALIAS
   exists from that moment, readable by every dataset reader, and the check
   of section 4c can only refuse and drop it afterwards, not undo the read.
 - **Writers and readers.** Record `used_by` of `B.T`, and the flows with
-  schedules that run those configurations.
+  schedules that run those configurations. Three more sources, because
+  `flow list --with-schedules` shows only the schedules of `keboola.flow`
+  flows: `schedule list` shows every schedule, also one that runs a
+  configuration directly; `legacy_orchestrator_count` above 0 in the flow
+  list means that the project has orchestrator flows that the list leaves
+  out; and `flow triggers --project ALIAS --flow-id ID` shows a table
+  trigger of a flow. `used_by` reads input and output mappings only. It does
+  not see a transformation that reads `DATASET.T` directly in SQL: ask the
+  owner for those.
 - **Aliases.** kbagent shows that a table is an alias (`is_alias`), but not
   which table the alias points at. List every table of the project with
   `is_alias: true` from the last command, and ask the owner which of them
@@ -254,6 +313,8 @@ Refuse the table, and change nothing on it, when one of these holds. When
 the helper workspace already exists, delete it (the `workspace delete`
 command above):
 
+- The backend of the table is not BigQuery.
+- The bucket is linked from another project.
 - The table is an alias.
 - `definition.requirePartitionFilter` is true.
 - The table has at least one row access policy. Tables with row access
@@ -270,6 +331,10 @@ command above):
 - The operator cannot apply the recorded IAM bindings to the copy.
 - The copy was created without a policy tag that the source has (section 4c).
 - No partition column and no clustering column is confirmed.
+- The table goes through path B and has a RECORD (STRUCT) column or a
+  REPEATED column (`type` and `mode` of `schema.fields` in the `bq show`
+  output). `create-table --column` takes a name, a type and a length only,
+  so path B cannot create such a column.
 - `data_size_bytes` is over 5 TiB (5,497,558,138,880 bytes). This version
   does not convert such a table: it has no procedure that copies a table in
   ranges. Hand the table to the owner.
@@ -284,7 +349,7 @@ into the helper workspace as a view:
 
 ```bash
 kbagent --json workspace load --project ALIAS --workspace-id WS_ID --table-id B.T --load-type view
-kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT COUNT(DISTINCT DAY_EXPR) AS days, COUNT(DISTINCT DATE_TRUNC(DAY_EXPR, MONTH)) AS months, MIN(COL) AS min_value, MAX(COL) AS max_value, COUNTIF(COL IS NULL) AS null_count FROM T"
+kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT COUNT(DISTINCT IF(DAY_EXPR BETWEEN DATE '1960-01-01' AND DATE '2159-12-31', DAY_EXPR, NULL)) AS days, COUNT(DISTINCT IF(DAY_EXPR BETWEEN DATE '1960-01-01' AND DATE '2159-12-31', DATE_TRUNC(DAY_EXPR, MONTH), NULL)) AS months, COUNT(DISTINCT IF(DAY_EXPR BETWEEN DATE '1960-01-01' AND DATE '2159-12-31', DATE_TRUNC(DAY_EXPR, YEAR), NULL)) AS years, COUNTIF(DAY_EXPR < DATE '1960-01-01' OR DAY_EXPR > DATE '2159-12-31') AS out_of_range, MIN(DAY_EXPR) AS min_value, MAX(DAY_EXPR) AS max_value, COUNTIF(COL IS NULL) AS null_count FROM T"
 ```
 
 `workspace load` writes to the project (a view), not to the table. It still
@@ -302,6 +367,12 @@ Replace it in every query of this runbook:
 
 For a STRING column run the profile query of section 4a first.
 
+`min_value` and `max_value` are dates, also for a STRING column (a `MIN` of
+the strings would be alphabetical). `days`, `months` and `years` count only
+dates from 1960-01-01 to 2159-12-31. BigQuery puts every date outside that
+range into one partition, `__UNPARTITIONED__`, and `out_of_range` counts
+those rows.
+
 A cluster-only table that goes through copy and swap skips the query, but it
 still loads the view: sections 3 and 5 count rows through it. A cluster-only
 table converted in place skips sections 1 to 4d and creates no workspace
@@ -318,10 +389,14 @@ rows_count:
 data_size_bytes:
 primary_key:
 last_import_date:
+Backend (must be bigquery):
+Bucket linked (must be no):
+Typed (typed_columns above 0) / untyped:
 Columns and types:
 Nullable per column (column_details[].nullable):
 Length per column (column_details[].length):
 Current layout (timePartitioning / rangePartitioning / clustering):
+timePartitioning.expirationMs (when set):
 requirePartitionFilter (must not be true; null on an unpartitioned table):
 Column defaults (column_details[].default):
 policyTagState per column (Storage, last observed):
@@ -334,7 +409,7 @@ Writers (used_by, flows, schedules):
 Readers:
 Aliases that point at the table (ID, columns, filter, column sync):
 Owner creates the aliases again after the swap (yes / no aliases):
-Distinct days / months, min, max, null_count of the partition column:
+Distinct days / months / years, out_of_range, min, max, null_count of the partition column:
 Table IAM policy JSON:
 Row access policies (must be none):
 Search indexes (CREATE statements):
@@ -344,26 +419,30 @@ Owner who pauses the writers:
 
 ## 2. Choose granularity
 
-Use the `days`, `months` and `null_count` values of section 1. Rows with NULL
-in `COL` go to one more partition (`__NULL__`), and it counts toward the
-limit. So add 1 to both counts when `null_count` is above 0:
+Use the `days`, `months`, `years`, `null_count` and `out_of_range` values of
+section 1. Rows with NULL in `COL` go to one more partition (`__NULL__`), and
+rows with a date outside 1960-01-01 to 2159-12-31 go to one more
+(`__UNPARTITIONED__`). Both count toward the limit. So add 1 to each count
+when `null_count` is above 0, and 1 more when `out_of_range` is above 0:
 
-- `day_partitions` = `days`, plus 1 when `null_count` is above 0.
-- `month_partitions` = `months`, plus 1 when `null_count` is above 0.
+- `day_partitions` = `days`, plus those.
+- `month_partitions` = `months`, plus those.
+- `year_partitions` = `years`, plus those.
 
 | Partitions | Granularity | Flag |
 |---|---|---|
 | `day_partitions` at most 4,000 | DAY | `--time-partitioning-type DAY` |
 | `day_partitions` over 4,000, `month_partitions` at most 4,000 | MONTH | `--time-partitioning-type MONTH` |
-| `month_partitions` over 4,000 | Stop. Ask the owner. | |
+| `month_partitions` over 4,000, `year_partitions` at most 4,000 | YEAR | `--time-partitioning-type YEAR` |
+| `year_partitions` over 4,000 | Stop. Ask the owner. | |
 
 The table gives the default. The owner may choose a coarser granularity than
 the table gives (MONTH instead of DAY, or YEAR): record that the owner chose
 it, and use `--time-partitioning-type MONTH` or `YEAR`. A finer granularity
 than the table gives is never used.
 
-On that stop, delete the helper workspace (the `workspace delete` command of
-section 1). No other object exists yet.
+On the stop of the last row, delete the helper workspace (the `workspace
+delete` command of section 1). No other object exists yet.
 
 BigQuery rejects a job that modifies more than 4,000 partitions. The limit is
 per job. So it binds the copy, and it also binds the output-mapping load of
@@ -378,8 +457,11 @@ changes no configuration and pauses nothing.
 Check that no job runs before the copy:
 
 ```bash
-kbagent --json job list --project ALIAS --status processing
+kbagent --json job list --project ALIAS --limit 100 | jq '[.data.jobs[] | select(.isFinished != true) | {id, status}]'
 ```
+
+The result must be empty. The filter also shows a job that is created or
+waiting and has not started yet; `--status processing` would miss it.
 
 - **Streaming.** Ask the owner for the time of the last streaming write and
   record it. Rows that were streamed recently can be invisible to the copy
@@ -389,6 +471,12 @@ kbagent --json job list --project ALIAS --status processing
   BigQuery refuses to rename a table for about 5 hours after the last
   streaming write, sometimes longer. Section 6 checks this before the swap.
 - **DML.** A running DML statement on the table blocks the rename.
+
+Section 1 read the partition values before the writers were paused. Now
+that they are paused, run the partition-value query of section 1 again, and
+for a STRING column the two queries of section 4a. `bad_values` must be 0,
+and the counts must give the granularity that section 2 chose. When they do
+not, go back to section 2, or stop as section 4a says.
 
 Count the rows of the table right before the copy, with a query on the view
 that section 1 loaded, and record the result as the row count before the
@@ -528,6 +616,16 @@ Use the granularity of section 2. For a cluster-only table omit both
 the owner wants the existing rows reclustered at once, or when the installed
 kbagent has no `storage clustering-set` (section 4C).
 
+`--primary-key` takes one column. Repeat it for every column of
+`primary_key` recorded in section 1, in the same order, and omit it when the
+table has no primary key. A comma-separated list is sent as one column name.
+
+When section 1 recorded `timePartitioning.expirationMs`, add
+`--time-partitioning-expiration-ms` with that value. The copy does not
+inherit the expiration, and without the flag the new table keeps its
+partitions for ever. Leave it out only when the owner asks to drop the
+expiration. Both rules hold for the `create-table` of path B too (4b).
+
 The copy keeps the columns, their types and NOT NULL of the source. It keeps
 the primary key that the command requests.
 
@@ -567,7 +665,8 @@ Path B has two variants. Decide which one applies before 4a:
 
 #### 4a. Profile the column (variant with a type change only)
 
-The format string is an input from the owner. The default is `%Y-%m-%d`.
+The format string is the input from the owner (section 0). The default is
+`%Y-%m-%d`.
 
 ```bash
 kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT COUNTIF(COL IS NOT NULL AND SAFE.PARSE_DATE('%Y-%m-%d', COL) IS NULL) AS bad_values, COUNTIF(COL IS NULL) AS null_count, COUNT(*) AS total FROM T"
@@ -618,7 +717,7 @@ the transformation without `--created-table`, then set both mappings:
 
 ```bash
 kbagent --json transformation create --project ALIAS --component-id keboola.google-bigquery-transformation \
-  --name "repartition T" --sql "CREATE TABLE T_repart (PK STRING NOT NULL, COL DATE, C1 STRING, OTHER STRING) AS SELECT PK, SAFE.PARSE_DATE('%Y-%m-%d', COL) AS COL, C1, OTHER FROM T"
+  --name "repartition T" --sql "CREATE TABLE T_repart (PK STRING NOT NULL, COL DATE, C1 STRING, OTHER STRING) AS SELECT PK, PARSE_DATE('%Y-%m-%d', COL) AS COL, C1, OTHER FROM T"
 kbagent --json transformation edit --project ALIAS --config-id CFG_ID --change-description "map repartition tables" \
   --storage '{"input": {"tables": [{"source": "B.T", "destination": "T"}]}, "output": {"tables": [{"source": "T_repart", "destination": "B.T_repart", "primary_key": ["PK"]}]}}'
 kbagent --json job run --project ALIAS --component-id keboola.google-bigquery-transformation --config-id CFG_ID --wait --timeout 3600
@@ -630,9 +729,16 @@ order, as `--primary-key` of section 4b. An output mapping whose key differs
 from the key of the destination table does not load as it is. Omit
 `primary_key` only when the table has no primary key.
 
+The fill uses `PARSE_DATE`, not `SAFE.PARSE_DATE`: a value that does not
+parse fails the job instead of becoming NULL without a trace. Section 4a
+found no such value, so a failure here means that a write landed after it.
+
 The `CREATE TABLE` statement names every column with its type, and `NOT
 NULL` for every column recorded with `nullable: false` in section 1. Use the
-types of the definition in 4b. A plain `CREATE TABLE T_repart AS SELECT ...`
+types of the definition in 4b, written as BigQuery SQL types: `INTEGER` is
+`INT64`, `FLOAT` is `FLOAT64`, `BOOLEAN` is `BOOL`; `STRING`, `NUMERIC`,
+`BIGNUMERIC`, `DATE`, `DATETIME`, `TIME`, `TIMESTAMP`, `BYTES`, `JSON` and
+`GEOGRAPHY` keep their name. A plain `CREATE TABLE T_repart AS SELECT ...`
 creates every column nullable; the output mapping then tries to change the
 NOT NULL columns of the table from 4b, and the job fails ("column's mode
 changed: REQUIRED -> NULLABLE"). Write the types without a length and
@@ -649,6 +755,21 @@ order of the source. Run `config delete` only after a successful job: it
 moves the helper configuration to the trash. When the job fails, stop and
 run the abort step (section 4d), which drops the copy, this configuration
 and the helper workspace.
+
+A `job run --wait` that ends with exit 7 (`JOB_TIMEOUT_TERMINATED`) or exit
+4 (`QUEUE_JOB_TIMEOUT`) did not see the job end: after a timeout kbagent
+asks the queue to kill the job and waits only a few seconds. A job that is
+still ending can finish its output mapping after the copy was dropped, and
+create `B.T_repart` again without the layout and without the policy tags.
+So before section 4d, read the job until it is finished:
+
+```bash
+kbagent --json job detail --project ALIAS --job-id QUEUE_JOB_ID | jq '.data | {status, isFinished}'
+```
+
+`QUEUE_JOB_ID` is the ID of the transformation job (in the output or in the
+error details of `job run`). Start section 4d only when `isFinished` is
+true.
 
 kbagent has no command that imports a workspace table into a Storage table.
 That is why the fill goes through a transformation and its output mapping.
@@ -714,7 +835,7 @@ production table, and section 8 decides about it.
 With the owner's yes, in this order:
 
 ```bash
-kbagent --json storage table-detail --project ALIAS --table-id B.T_repart
+kbagent --json storage table-detail --project ALIAS --table-id B.T_repart | jq 'del(.data.definition.partitions)'
 kbagent --json storage delete-table --project ALIAS --table-id B.T_repart --dry-run
 kbagent --json storage delete-table --project ALIAS --table-id B.T_repart --yes
 kbagent --json config delete --project ALIAS --component-id keboola.google-bigquery-transformation --config-id CFG_ID
@@ -724,8 +845,12 @@ kbagent --json workspace delete --project ALIAS --workspace-id WS_ID --yes
 - The copy goes first: it is the object that holds data. After a failed
   path A copy the table may not exist: when `table-detail` answers
   `NOT_FOUND`, skip both `delete-table` commands.
-- `config delete` applies to path B only, and only when `CFG_ID` still
-  exists (the fill job failed, so section 4 did not delete it).
+- `config delete` applies to path B only, and only when `CFG_ID` exists:
+  skip it when the abort came before `transformation create` (the policy-tag
+  check on the empty table), and when section 4 already deleted the
+  configuration.
+- After a failed or timed-out fill job, the job is finished before this
+  step starts (section 4, "Fill the table with a transformation").
 - Read `B.T` once more with `storage table-detail` and confirm that it is
   unchanged: the layout and `rows_count` of section 1.
 - Tell the owner that the dropped copy stays reachable through BigQuery time
@@ -734,7 +859,7 @@ kbagent --json workspace delete --project ALIAS --workspace-id WS_ID --yes
 ## 5. Validate (refuse the swap on any mismatch)
 
 ```bash
-kbagent --json storage table-detail --project ALIAS --table-id B.T_repart
+kbagent --json storage table-detail --project ALIAS --table-id B.T_repart | jq 'del(.data.definition.partitions)'
 kbagent --json workspace load --project ALIAS --workspace-id WS_ID --table-id B.T --table-id B.T_repart --load-type view
 kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT (SELECT COUNT(*) FROM T) AS old_rows, (SELECT COUNT(*) FROM T_repart) AS new_rows"
 ```
@@ -761,13 +886,21 @@ helper workspace.
 - **Column defaults.** `column_details[].default` of each column equals the
   value recorded for `B.T` in section 1. A missing default is a mismatch.
 - **Layout.** `definition.timePartitioning` and `definition.clustering` of the
-  copy are as requested.
+  copy are as requested, `timePartitioning.expirationMs` included when
+  section 1 recorded one.
 - **Policy tags.** The tags of each column, read from BigQuery in section
   4c, equal the tags recorded for the source in section 1. A source column
   with a tag that the copy lacks stops the conversion. `policyTagState` is
   not part of this check.
 - **Table IAM bindings.** The bindings of the copy equal the recorded ones.
-- **Path B, NULL count.** The count of NULL in `COL` is equal on both tables.
+- **Path B with a type change, NULL count.** The count of NULL in `COL` is
+  equal on both tables. The per-partition query below cannot show this: it
+  parses `COL` of the old table, so a string that does not parse and a NULL
+  land in the same group. Count the NULLs directly:
+
+  ```bash
+  kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT (SELECT COUNTIF(COL IS NULL) FROM T) AS old_nulls, (SELECT COUNTIF(COL IS NULL) FROM T_repart) AS new_nulls"
+  ```
 
 kbagent cannot read IAM bindings. The operator reads them on the copy:
 
@@ -861,7 +994,7 @@ section 3.
 ```bash
 kbagent --json storage swap-tables --project ALIAS --table-id B.T --target-table-id B.T_repart --branch 0 --dry-run
 kbagent --json storage swap-tables --project ALIAS --table-id B.T --target-table-id B.T_repart --branch 0 --yes --timeout 3600
-kbagent --json storage table-detail --project ALIAS --table-id B.T
+kbagent --json storage table-detail --project ALIAS --table-id B.T | jq 'del(.data.definition.partitions)'
 ```
 
 The dry run only echoes the pair of tables. It validates nothing: Storage
@@ -918,7 +1051,7 @@ layout stayed:
 
 ```bash
 kbagent --json job list --project ALIAS --limit 20
-kbagent --json storage table-detail --project ALIAS --table-id B.T
+kbagent --json storage table-detail --project ALIAS --table-id B.T | jq 'del(.data.definition.partitions)'
 ```
 
 Watch the next read of each consumer too. For every reader recorded in
@@ -952,15 +1085,19 @@ While `B.T_repart` exists, the rollback is a second swap. Before it:
 ```bash
 kbagent --json storage swap-tables --project ALIAS --table-id B.T --target-table-id B.T_repart --branch 0 --dry-run
 kbagent --json storage swap-tables --project ALIAS --table-id B.T --target-table-id B.T_repart --branch 0 --yes --timeout 3600
-kbagent --json storage table-detail --project ALIAS --table-id B.T
+kbagent --json storage table-detail --project ALIAS --table-id B.T | jq 'del(.data.definition.partitions)'
 ```
 
 After a rollback the original physical table is back at `B.T`, with its IAM
-bindings. The aliases that the owner created again after the first swap now
+bindings. The operator reads the bindings and the policy tags once more on
+`B.T` (the `get-iam-policy` and policy tag commands of section 1) and stops
+on a difference from the values recorded in section 1. The aliases that the owner created again after the first swap now
 read `B.T_repart`: the owner deletes them and creates them again on `B.T`
 (section 6, step 4). A person creates the search indexes again
 (section 6, step 3). After a rollback of path B with a type change the owner also reverts the
-writers to STRING.
+writers to STRING. The rows that were loaded after the first swap hold a
+DATE in `COL`: the owner formats them back with the format string
+(`FORMAT_DATE`) when loading them into `B.T` again.
 
 Time travel of the new table starts at the copy. A restore to an earlier
 point is possible only from the old table.
@@ -999,8 +1136,8 @@ workspace: it replaces the two views there, so it waits for a yes like every
 other write.
 
 ```bash
-kbagent --json storage table-detail --project ALIAS --table-id B.T
-kbagent --json storage table-detail --project ALIAS --table-id B.T_repart
+kbagent --json storage table-detail --project ALIAS --table-id B.T | jq 'del(.data.definition.partitions)'
+kbagent --json storage table-detail --project ALIAS --table-id B.T_repart | jq 'del(.data.definition.partitions)'
 kbagent --json workspace load --project ALIAS --workspace-id WS_ID --table-id B.T --table-id B.T_repart --load-type view
 kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT (SELECT COUNT(*) FROM T) AS rows_at_t, (SELECT COUNT(*) FROM T_repart) AS rows_at_t_repart"
 ```
@@ -1016,18 +1153,20 @@ Compare, for both tables, the physical state with the Storage rows:
 
 kbagent has no bucket refresh and no other command that repairs the metadata
 of a half-moved swap. Hand the evidence to the Connection maintainers
-(Storage). They finish or undo the metadata move. Continue only after both
-tables match their physical state. Where to continue depends on which swap
-failed:
+(Storage). They finish or undo the metadata move, and they say which of the
+two they did. Continue only after both tables match their physical state.
+Where to continue depends on which table `B.T` holds now, so read it first
+with `storage table-detail` and compare `definition` with the layout
+recorded in section 1:
 
-- **The first swap (section 6) failed.** `B.T` must now hold the new layout.
-  Continue at section 6, step 1.
-- **The rollback swap (section 8) failed.** `B.T` must now hold the old
-  layout and the original physical table. Do not use the steps of section 6.
-  Check with `storage table-detail` that `definition` of `B.T` shows the
-  layout recorded in section 1, then continue with the steps after the
-  rollback in section 8: the IAM bindings, the search indexes, the aliases
-  and, on path B, the writers.
+- **`B.T` holds the new layout** (the first swap was finished, or the
+  rollback swap was undone). Continue at section 6, step 1.
+- **`B.T` holds the old layout and the original physical table** (the
+  rollback swap was finished, or the first swap was undone). Do not use the
+  steps of section 6. Continue with the steps after the rollback in section
+  8: the IAM bindings and policy tags, the search indexes, the aliases and,
+  on path B, the writers. After an undone first swap `B.T_repart` is the
+  copy again: run the abort step (section 4d) or start again at section 5.
 
 ## 10. Cost and record
 

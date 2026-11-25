@@ -80,6 +80,8 @@ Ask the operator for every input before any write. Do not guess one.
 5. Clustering columns, at most 4, in order.
 6. Primary key of the table.
 7. The owner who pauses and resumes the writers.
+   When the partition column is a STRING: the date format string of its
+   values (default `%Y-%m-%d`).
 8. Confirmation that the operator has BigQuery access to the project's
    dataset for the `bq` steps. Without it the runbook refuses the table.
 
@@ -93,7 +95,10 @@ needed, and the runbook goes from section 0 to section 4C.
   wait for an explicit yes from the operator. One yes covers one command.
 - **`--json` on every call**, before the subcommand.
 - **A timeout is not a failure.** `STORAGE_JOB_TIMEOUT` (exit 4) means the job
-  still runs on the server. Follow it with `storage job-detail --wait`. Never
+  still runs on the server. Follow it with `storage job-detail --wait`. The
+  one exception is the job of `workspace create`: its result holds the
+  workspace key, so it is read only through the filter of runbook section 1.
+  Never
   re-run a swap: a second swap swaps the tables back. Never re-run a copy: it
   starts a second copy. This also holds for the in-place clustering change.
 - **A half-moved swap stops the run.** On the error

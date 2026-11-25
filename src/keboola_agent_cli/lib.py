@@ -53,6 +53,7 @@ from .constants import (
 )
 from .errors import ErrorCode, KeboolaApiError
 from .job_wait_errors import RAW_POLL_ERRORS, created_job_error, raw_poll_error
+from .models import ImportMethod
 from .result_models import (
     ConfigDetailResult,
     JobResult,
@@ -63,6 +64,8 @@ from .result_models import (
     TokenListEntryResult,
     UploadTableResult,
 )
+from .services._import_method import refuse_unsupported_import_method
+from .services._storage_jobs import import_method_refusal, is_import_method_refusal
 from .services._token_last_used import dormancy_rank, enrich_tokens
 from .services.job_idempotency_store import JobIdempotencyStore, run_idempotent_job
 
@@ -102,6 +105,27 @@ def _with_uploaded_file_hint(exc: KeboolaApiError) -> KeboolaApiError:
         error_code=exc.error_code,
         retryable=exc.retryable,
         details=exc.details,
+    )
+
+
+def _import_method_refusal(
+    exc: KeboolaApiError, table_id: str, import_method: ImportMethod
+) -> KeboolaApiError:
+    """Storage's refusal of ``import_method``, as the CLI reports it (``INVALID_ARGUMENT``).
+
+    Reached when the pre-flight could not read the bucket's backend. The
+    recovery for an uploaded file is in plain words, without the method,
+    because repeating it fails the same way.
+    """
+    recovery = ""
+    file_id = exc.details.get("file_id")
+    if file_id is not None and exc.details.get("job_id") is None:
+        recovery = (
+            f" The file was uploaded as Storage file {file_id}; import it from there "
+            "without an import method instead of uploading it again."
+        )
+    return import_method_refusal(
+        exc, table_id, import_method, option="the import_method argument", recovery=recovery
     )
 
 
@@ -577,6 +601,7 @@ class Client:
         branch_id: int | None = None,
         wait: bool = True,
         timeout: float | None = None,
+        import_method: ImportMethod | str = ImportMethod.auto,
     ) -> UploadTableResult:
         """Import a CSV into an **existing** Storage table -> :class:`UploadTableResult`.
 
@@ -597,15 +622,27 @@ class Client:
                 itself is always awaited); ``imported_rows`` is then None and
                 :meth:`storage_job` follows the job by ``job_id``.
             timeout: Import wait budget in seconds (``None`` = 600).
+            import_method: How a Snowflake import writes the table
+                (``auto`` | ``single_statement`` | ``multi_statement``).
+                ``auto`` sends nothing (platform default). Any other value
+                reads the bucket's backend first and is refused before the
+                upload when it is not Snowflake.
 
         Raises:
-            KeboolaApiError: On a wait timeout ``STORAGE_JOB_TIMEOUT``, NOT
+            ValueError: ``import_method`` is not an :class:`ImportMethod` value.
+            KeboolaApiError: ``INVALID_ARGUMENT`` for an import method on a
+                non-Snowflake table: before the upload when the bucket's
+                backend is readable, else from Storage's refusal after it
+                (``details["file_id"]`` set, nothing imported). On a wait timeout ``STORAGE_JOB_TIMEOUT``, NOT
                 retryable -- the import keeps running; ``details`` carries
                 ``job_id`` and ``file_id``. Any failure after the upload
                 carries ``details["file_id"]``.
         """
         effective_branch = branch_id if branch_id is not None else self._resolved_branch_id
         file_size_bytes = Path(file_path).stat().st_size
+        import_method = refuse_unsupported_import_method(
+            self._client, table_id, import_method, effective_branch, creates_missing_bucket=False
+        )
         try:
             outcome = self._client.upload_table_with_outcome(
                 table_id=table_id,
@@ -616,8 +653,11 @@ class Client:
                 branch_id=effective_branch,
                 wait=wait,
                 max_wait=timeout,
+                import_method=import_method,
             )
         except KeboolaApiError as exc:
+            if is_import_method_refusal(exc, import_method):
+                raise _import_method_refusal(exc, table_id, import_method) from exc
             raise _with_uploaded_file_hint(exc) from exc
         job = outcome.job
         if job.get("status") == "error":
@@ -636,6 +676,7 @@ class Client:
             {
                 "table_id": table_id,
                 "incremental": incremental,
+                "import_method": import_method.value,
                 "file_size_bytes": file_size_bytes,
                 "imported_rows": results.get("importedRowsCount"),
                 "warnings": results.get("warnings", []),
