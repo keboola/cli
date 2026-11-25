@@ -47,7 +47,8 @@ nothing. It does not mean that there is nothing to carry. Treat the objects
 as unknown and refuse the table (section 1, refuse rules).
 
 `T_repart` lives in the same bucket as `T`. The swap refuses a pair of tables
-from two buckets, and it refuses an alias.
+from two buckets, and it refuses an alias. `swap-tables --dry-run` does not
+show that: it only echoes the pair, and Storage checks it when the swap runs.
 
 All writes run in production: the swap uses `--branch 0`. Check that no dev
 branch is active for the project, and reset it when one is:
@@ -149,6 +150,9 @@ kbagent cannot read them. The operator runs:
 ```bash
 bq --project_id=GCP_PROJECT ls --row_access_policies --format=prettyjson DATASET.T
 ```
+
+A table without a policy prints the plain text `No row access policies
+found.`, not JSON. That line is the "none" answer.
 
 When the table has at least one row access policy, stop here. Delete the
 helper workspace and create no copy. Name the policies to the owner. The table
@@ -312,7 +316,7 @@ Columns and types:
 Nullable per column (column_details[].nullable):
 Length per column (column_details[].length):
 Current layout (timePartitioning / rangePartitioning / clustering):
-requirePartitionFilter (must be false):
+requirePartitionFilter (must not be true; null on an unpartitioned table):
 Column defaults (column_details[].default):
 policyTagState per column (Storage, last observed):
 Policy tags per column (bq show):
@@ -432,7 +436,8 @@ step (section 4d). It reads whether `B.T_repart` exists, drops it when it
 does, and deletes the helper workspace. A new attempt starts again at
 section 1.
 
-Record the duration of the copy from the job times.
+Record the duration of the copy as the wall-clock time of the command. Its
+output carries no job ID and no job times.
 
 ### Path B: typed empty table filled by a transformation
 
@@ -563,8 +568,9 @@ section (section 1). Keep this order:
    sides proves nothing. Do not set the tag outside Storage: a tag that is
    written to the BigQuery schema directly bypasses Storage.
 
-2. **Table IAM bindings.** A person applies the recorded policy to the copy.
-   Save the policy JSON of section 1 to a file and remove its `etag` key
+2. **Table IAM bindings.** Skip this step when the recorded `bindings` list
+   is empty: there is nothing to carry. Otherwise a person applies the
+   recorded policy to the copy. Save the policy JSON of section 1 to a file and remove its `etag` key
    first. A person runs:
 
    ```bash
@@ -652,7 +658,8 @@ kbagent cannot read IAM bindings. The operator reads them on the copy:
 bq --project_id=GCP_PROJECT get-iam-policy --format=prettyjson DATASET.T_repart
 ```
 
-Every path B table also gets a row count per partition. A cluster-only table has no partitions and skips it.
+Every partitioned table, on path A and on path B, also gets a row count per
+partition. A cluster-only table has no partitions and skips it.
 
 ```bash
 kbagent --json workspace query --project ALIAS --workspace-id WS_ID --full --sql "SELECT p, SUM(old_c) AS old_rows, SUM(new_c) AS new_rows FROM (SELECT PART_OLD AS p, COUNT(*) AS old_c, 0 AS new_c FROM T GROUP BY p UNION ALL SELECT PART_NEW AS p, 0 AS old_c, COUNT(*) AS new_c FROM T_repart GROUP BY p) GROUP BY p HAVING SUM(old_c) != SUM(new_c)"
@@ -738,8 +745,12 @@ kbagent --json storage swap-tables --project ALIAS --table-id B.T --target-table
 kbagent --json storage table-detail --project ALIAS --table-id B.T
 ```
 
+The dry run only echoes the pair of tables. It validates nothing: Storage
+checks the pair when the swap runs.
+
 After the swap `B.T` holds the new layout and `B.T_repart` holds the old
-table. Then, in this order:
+table. The swap also moves `last_import_date` of both tables to the time of
+the swap. Then, in this order:
 
 1. **Layout.** Verify `definition.timePartitioning` and `clustering` on
    `B.T`.
@@ -820,6 +831,7 @@ While `B.T_repart` exists, the rollback is a second swap. Before it:
   `B.T_repart` is not dropped before that is done.
 
 ```bash
+kbagent --json storage swap-tables --project ALIAS --table-id B.T --target-table-id B.T_repart --branch 0 --dry-run
 kbagent --json storage swap-tables --project ALIAS --table-id B.T --target-table-id B.T_repart --branch 0 --yes --timeout 3600
 kbagent --json storage table-detail --project ALIAS --table-id B.T
 ```
