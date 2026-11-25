@@ -347,6 +347,11 @@ limit. So add 1 to both counts when `null_count` is above 0:
 | `day_partitions` over 4,000, `month_partitions` at most 4,000 | MONTH | `--time-partitioning-type MONTH` |
 | `month_partitions` over 4,000 | Stop. Ask the owner. | |
 
+The table gives the default. The owner may choose a coarser granularity than
+the table gives (MONTH instead of DAY, or YEAR): record that the owner chose
+it, and use `--time-partitioning-type MONTH` or `YEAR`. A finer granularity
+than the table gives is never used.
+
 On that stop, delete the helper workspace (the `workspace delete` command of
 section 1). No other object exists yet.
 
@@ -661,6 +666,7 @@ the query counts per partition of the new table:
 |---|---|
 | DAY | `DAY_EXPR` |
 | MONTH | `DATE_TRUNC(DAY_EXPR, MONTH)` |
+| YEAR | `DATE_TRUNC(DAY_EXPR, YEAR)` |
 
 Build both from `DAY_EXPR` of section 1, with the type that `COL` has on
 that table:
