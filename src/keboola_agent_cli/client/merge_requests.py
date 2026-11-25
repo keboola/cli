@@ -34,9 +34,34 @@ from typing import Any, Protocol
 import httpx
 
 from ..constants import MERGE_JOB_MAX_WAIT, STORAGE_JOB_MAX_WAIT
+from ..errors import ErrorCode, KeboolaApiError
 from ._core import _CoreClient
 
 _BASE = "/v2/storage/merge-request"
+
+# The merge job's own outcomes: known, unlike a poll that failed.
+_JOB_OUTCOME_CODES = (ErrorCode.STORAGE_JOB_FAILED, ErrorCode.STORAGE_JOB_TIMEOUT)
+
+
+def _lost_merge_job(exc: KeboolaApiError | httpx.TransportError, job_id: Any) -> KeboolaApiError:
+    """The error of a poll that failed after the merge was accepted.
+
+    Never retryable: repeating the command would send the merge again.
+    ``details.merge_started`` tells Layer 2 that the merge did start.
+    """
+    if isinstance(exc, KeboolaApiError):
+        message, status, code, details = exc.message, exc.status_code, exc.error_code, exc.details
+    else:
+        message = f"The connection failed while waiting for the merge job ({type(exc).__name__})."
+        status, code, details = 0, ErrorCode.CONNECTION_ERROR, {}
+    return KeboolaApiError(
+        message=message,
+        status_code=status,
+        error_code=code,
+        retryable=False,
+        details={**details, "merge_started": True, "job_id": job_id},
+    )
+
 
 # ``MergeRequests.list`` shadows the ``list`` builtin inside the class body
 # (annotations there would resolve to the method), so class-scope annotations
@@ -329,7 +354,13 @@ class MergeRequests:
         response = self._requester.request(
             "PUT", f"{_BASE}/{merge_request_id}/merge", retry_safe=False
         )
-        return self._requester.wait_for_storage_job(response.json(), max_wait=MERGE_JOB_MAX_WAIT)
+        job = response.json()
+        try:
+            return self._requester.wait_for_storage_job(job, max_wait=MERGE_JOB_MAX_WAIT)
+        except (KeboolaApiError, httpx.TransportError) as exc:
+            if isinstance(exc, KeboolaApiError) and exc.error_code in _JOB_OUTCOME_CODES:
+                raise
+            raise _lost_merge_job(exc, job.get("id")) from exc
 
 
 class _MergeRequestsMixin(_CoreClient):

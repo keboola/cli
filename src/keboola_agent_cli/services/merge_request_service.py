@@ -42,6 +42,7 @@ from ..errors import (
     KeboolaApiError,
     request_outcome_unknown,
 )
+from ..http_base import _bound_error_params
 from ..json_utils import DiffEntry, compute_diff_entries
 from ..models import ProjectConfig
 from .base import BaseService, find_default_branch_id
@@ -966,6 +967,8 @@ class MergeRequestService(BaseService):
         """
         if exc.error_code in self._JOB_OUTCOME_CODES:
             return False
+        if exc.details.get("merge_started"):
+            return True
         if exc.error_code == ErrorCode.CONNECTION_ERROR:
             return not exc.retryable
         return request_outcome_unknown(exc)
@@ -992,9 +995,10 @@ class MergeRequestService(BaseService):
                 f"{merge_request_id} is being merged (state in_merge).",
             ) from exc
         seen = f"its state is {state!r}" if current is not None else "it could not be read back"
+        started = "was started" if exc.details.get("merge_started") else "may have started"
         raise KeboolaApiError(
             message=(
-                f"{exc.message} The merge may have started: {seen}, so this could not be "
+                f"{exc.message} The merge {started}: {seen}, so its outcome could not be "
                 f"confirmed. Check `kbagent merge-request detail --merge-request-id "
                 f"{merge_request_id}` before merging again."
             ),
@@ -1008,44 +1012,52 @@ class MergeRequestService(BaseService):
         self, client: Any, merge_request_id: int, exc: KeboolaApiError
     ) -> dict[str, Any]:
         """Return the MR when a refusal hides a finished merge; raise otherwise."""
-        exc = self._classify_codeless_409(client, merge_request_id, exc)
-        underway = self._merge_underway_or_done(client, merge_request_id, exc)
+        conflicts = self._conflicts_behind_codeless_409(client, merge_request_id, exc)
+        if conflicts:
+            exc = self._with_conflicts(exc, conflicts)
+        not_ready = conflicts == [] or exc.details.get("api_error_code") == self._NOT_READY_CODE
+        underway = self._merge_underway_or_done(client, merge_request_id) if not_ready else None
         if underway is None:
-            self._remap_merge_conflict(exc)
+            self._remap_merge_conflict(exc, not_ready=not_ready)
             raise exc
         if underway.get("state") == "in_merge":
             raise self._merge_running_error(merge_request_id, underway, exc) from exc
         return underway
 
-    def _classify_codeless_409(
+    def _conflicts_behind_codeless_409(
         self, client: Any, merge_request_id: int, exc: KeboolaApiError
-    ) -> KeboolaApiError:
-        """Decide a 409 without a code and without conflicts by the live list.
+    ) -> list[dict[str, Any]] | None:
+        """The live conflicts when a 409 has no code and lists none itself.
 
-        Conflicts: listed in the details. None: it was not a conflict, so it
-        becomes the not-ready 409. A failed read leaves the 409 as it is.
+        An empty list means the 409 was not a conflict. ``None``: another error,
+        or the list could not be read, so the 409 stays as it is.
         """
         if exc.status_code != 409 or exc.details.get("api_error_code") is not None:
-            return exc
+            return None
         params = exc.details.get("api_error_params") or {}
         if params.get("errors") or exc.details.get("api_error_params_truncated"):
-            return exc
+            return None
         try:
-            conflicts = client.merge_requests.conflicts(merge_request_id)
+            return client.merge_requests.conflicts(merge_request_id)
         except (KeboolaApiError, httpx.TransportError) as read_exc:
             logger.warning("Conflicts read after a code-less merge 409 failed: %s", read_exc)
-            return exc
-        extra: dict[str, Any] = (
-            {"api_error_params": {**params, "errors": conflicts}}
-            if conflicts
-            else {"api_error_code": self._NOT_READY_CODE}
-        )
+            return None
+
+    @staticmethod
+    def _with_conflicts(exc: KeboolaApiError, conflicts: list[dict[str, Any]]) -> KeboolaApiError:
+        """The 409 with the live conflicts, bounded like the server's own list."""
+        bounded, truncated = _bound_error_params({"errors": conflicts})
+        details = dict(exc.details)
+        if bounded is not None:
+            details["api_error_params"] = {**details.get("api_error_params", {}), **bounded}
+        if truncated:
+            details["api_error_params_truncated"] = True
         return KeboolaApiError(
             message=exc.message,
             status_code=exc.status_code,
             error_code=exc.error_code,
             retryable=exc.retryable,
-            details={**exc.details, **extra},
+            details=details,
         )
 
     def _read_after_merge_call(self, client: Any, merge_request_id: int) -> dict[str, Any] | None:
@@ -1057,9 +1069,7 @@ class MergeRequestService(BaseService):
             return None
         return current if isinstance(current, dict) else None
 
-    def _merge_underway_or_done(
-        self, client: Any, merge_request_id: int, exc: KeboolaApiError
-    ) -> dict[str, Any] | None:
+    def _merge_underway_or_done(self, client: Any, merge_request_id: int) -> dict[str, Any] | None:
         """Return the MR when a not-ready 409 hides a merge that is running or done.
 
         A merge whose response was lost has already started, so a repeat gets
@@ -1068,8 +1078,6 @@ class MergeRequestService(BaseService):
         other state, or a failed read, returns ``None`` and the 409 is reported
         as before.
         """
-        if exc.status_code != 409 or exc.details.get("api_error_code") != self._NOT_READY_CODE:
-            return None
         current = self._read_after_merge_call(client, merge_request_id)
         if current is not None and current.get("state") in ("published", "in_merge"):
             return current
@@ -1114,7 +1122,7 @@ class MergeRequestService(BaseService):
             },
         )
 
-    def _remap_merge_conflict(self, exc: KeboolaApiError) -> None:
+    def _remap_merge_conflict(self, exc: KeboolaApiError, *, not_ready: bool) -> None:
         """Raise the RFC's dedicated error for a known merge 409; return for others.
 
         Only this call site knows the 409 came from the merge endpoint --
@@ -1128,7 +1136,7 @@ class MergeRequestService(BaseService):
         if exc.status_code != 409:
             return
         code = exc.details.get("api_error_code")
-        if code == self._NOT_READY_CODE:
+        if not_ready:
             raise KeboolaApiError(
                 message=(
                     f"{exc.message} The merge lock, MR state or a concurrently "

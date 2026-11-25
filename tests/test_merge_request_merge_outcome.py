@@ -160,6 +160,39 @@ class TestUnclearOutcome:
             assert payload["error"]["code"] == expected
 
 
+class TestLostMergeJob:
+    """The merge PUT was accepted (202), then polling its job failed."""
+
+    @pytest.mark.parametrize(
+        "poll",
+        [503, httpx.ReadTimeout("t"), httpx.ConnectError("x"), httpx.ReadError("reset")],
+    )
+    @pytest.mark.parametrize("state", ["in_merge", "published", "approved"])
+    def test_poll_failure_is_read_back(self, merge, httpx_mock, poll, state) -> None:
+        httpx_mock.add_response(method="GET", url=MR, json=_wire("approved"))
+        httpx_mock.add_response(
+            method="PUT", url=f"{MR}/merge", status_code=202, json={"id": 5, "status": "waiting"}
+        )
+        job = f"{STACK}/v2/storage/jobs/5"
+        if isinstance(poll, int):
+            httpx_mock.add_response(url=job, status_code=poll, text="x", is_reusable=True)
+        else:
+            httpx_mock.add_exception(poll, url=job, is_reusable=True)
+        httpx_mock.add_response(method="GET", url=MR, json=_wire(state))
+        if state == "published":
+            assert merge()["status"] == "already_merged"
+        else:
+            with pytest.raises(KeboolaApiError) as info:
+                merge()
+            assert info.value.retryable is False
+            assert info.value.details["job_id"] == 5
+            if state == "in_merge":
+                assert info.value.error_code == ErrorCode.MR_MERGE_RUNNING
+            else:
+                assert "The merge was started" in info.value.message
+        assert _puts(httpx_mock) == 1
+
+
 class TestKnownOutcomeIsNotReadBack:
     @pytest.mark.parametrize("status", [403, 422])
     def test_4xx(self, merge, httpx_mock, status) -> None:
@@ -225,20 +258,37 @@ class TestCodeless409:
         assert info.value.details["api_error_params"]["errors"] == CONFLICTS
         assert _gets(httpx_mock, MR) == 1
 
+    def test_live_conflicts_are_bounded_and_rendered(self, store, tmp_path, httpx_mock) -> None:
+        many = [{"componentId": "keboola.ex-db", "configurationId": f"cfg-{i}"} for i in range(500)]
+        self._refuse(httpx_mock, {"error": "Conflict"})
+        httpx_mock.add_response(method="GET", url=f"{MR}/conflicts", json=many)
+        httpx_mock.add_response(method="GET", url=MR, json=_wire("approved"), is_optional=True)
+        args = ["--config-dir", str(tmp_path), "merge-request", "merge", "--yes"]
+        result = CliRunner().invoke(app, [*args, "--project", ALIAS, "--merge-request-id", "7"])
+        assert result.exit_code == 1, result.output
+        assert "keboola.ex-db/cfg-0" in result.output
+        assert "cfg-499" not in result.output
+        assert "list truncated" in result.output
+
     @pytest.mark.parametrize(
         ("state", "code"),
         [
             ("approved", ErrorCode.MR_NOT_READY_TO_MERGE),
             ("in_merge", ErrorCode.MR_MERGE_RUNNING),
+            ("published", None),
         ],
     )
     def test_no_live_conflicts_is_not_ready(self, merge, httpx_mock, state, code) -> None:
         self._refuse(httpx_mock, {"error": "Conflict"})
         httpx_mock.add_response(method="GET", url=f"{MR}/conflicts", json=[])
         httpx_mock.add_response(method="GET", url=MR, json=_wire(state))
-        with pytest.raises(KeboolaApiError) as info:
-            merge()
-        assert info.value.error_code == code
+        if code is None:
+            assert merge()["status"] == "already_merged"
+        else:
+            with pytest.raises(KeboolaApiError) as info:
+                merge()
+            assert info.value.error_code == code
+            assert "api_error_code" not in info.value.details
         assert _gets(httpx_mock, f"{MR}/conflicts") == 1
         assert _gets(httpx_mock, MR) == 2
 
