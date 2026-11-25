@@ -14,6 +14,7 @@ from ..config_store import ConfigStore
 from ..constants import TABLE_DATA_JOB_MAX_WAIT
 from ..effective_branch import record_branch, resolve_branch
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
+from ..models import ImportMethod
 from ..services._storage_jobs import validate_wait_timeout
 from ..services._storage_tables import CLONE_TABLE_PRODUCTION_MESSAGE
 from ._all_projects import (
@@ -37,6 +38,7 @@ from ._helpers import (
 from ._progress import ProgressOption, transfer_progress
 from ._project_ref import PROJECT_HELP
 from ._storage_jobs import (
+    ImportMethodOption,
     ImportTimeoutOption,
     ImportWaitOption,
     print_import_outcome,
@@ -779,6 +781,7 @@ def storage_upload_table(
         "--branch",
         help="Dev branch ID (defaults to active branch if set via 'branch use')",
     ),
+    import_method: ImportMethodOption = ImportMethod.auto,
     wait: ImportWaitOption = True,
     timeout: ImportTimeoutOption = None,
     progress: ProgressOption = False,
@@ -823,6 +826,7 @@ def storage_upload_table(
                 wait=wait,
                 timeout=timeout,
                 on_progress=on_progress,
+                import_method=import_method,
             )
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
@@ -1993,6 +1997,7 @@ def storage_load_file(
         "--branch",
         help="Dev branch ID (defaults to active branch if set via 'branch use')",
     ),
+    import_method: ImportMethodOption = ImportMethod.auto,
     wait: ImportWaitOption = True,
     timeout: ImportTimeoutOption = None,
 ) -> None:
@@ -2023,6 +2028,7 @@ def storage_load_file(
             branch_id=effective_branch,
             wait=wait,
             timeout=timeout,
+            import_method=import_method,
         )
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)

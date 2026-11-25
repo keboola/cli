@@ -6505,7 +6505,7 @@ the web UI.
 
   ```json
   "runtime": {
-    "backend":   {"size": "small", "type": "e2bSandbox"},
+    "backend":   {"size": "small"},
     "workspace": {"enabled": true}
   }
   ```
@@ -7179,6 +7179,11 @@ It carries the command name, the outcome, and the duration -- never argument val
   `details.state: "in_merge"`) instead of `MR_NOT_READY_TO_MERGE` (exit 1): no second merge is
   started and no local cleanup runs -- the merge can still fail. Poll `detail`, do not merge
   again (since vNEXT).
+- **`merge_blockers` from the server are unioned with the live conflicts** (since vNEXT). When
+  Connection serializes `mergeBlockers` (DMD-1988), `detail` keeps every name in that list, unknown
+  kinds included, and adds `conflicts` when its live conflicts list is non-empty. Before, the
+  server list was taken as is, so an MR whose list was empty but which had live conflicts
+  read `mergeable: true`. Any blocker, known or not, makes `mergeable` false.
 - **Every result may carry `warnings[]`** (post-merge cleanup failure, a dropped
   `--change-description` on a delete resolution). A truncated conflict list inside
   `MR_MERGE_CONFLICT` carries `details.api_error_params_truncated: true` -- run `conflicts`.
@@ -7980,6 +7985,28 @@ the same way. Now a dev branch id is sent as a string (`"branchId": "12345"`);
 production and `--branch 0` stay `null`. The `--dry-run` body of `data-app
 create` shows the same string. On an older version, create the app in
 production or in the Keboola UI.
+
+## `--import-method` chooses how a Snowflake import writes the table
+
+*(since vNEXT)*
+
+`storage upload-table` and `storage load-file` take `--import-method auto|single_statement|multi_statement`
+(serve: `import_method` on the upload form and the load-to-table body). `auto`, the default, sends
+nothing and keeps the platform default. Details and the output-mapping key `import_method`:
+`import-method-workflow.md`.
+
+- **Snowflake only.** Another value than `auto` on a table of another backend is `INVALID_ARGUMENT`,
+  exit 2 (HTTP 400 over serve), and nothing is imported. Run the import again without the option.
+- **`upload-table` refuses before it writes.** It reads the bucket's backend first (for a bucket it
+  would auto-create: the project's default backend), so nothing is created or uploaded. A failed read
+  (403, or 404 with `--no-auto-create`) never stops the upload. Only when no
+  backend can be read does Storage refuse the import itself (HTTP 400
+  `storage.tables.importMethodNotSupported`); the file is then already in Storage, and the error names
+  the `storage load-file` command that imports it without the method and any bucket or table it
+  auto-created. `load-file` relies on that 400 (it writes nothing before the import).
+- **The result echoes what you asked for, not what ran.** `import_method` in the result is the
+  requested value. The `tableImportDone` event of the table has the method Storage used
+  (`importMethod`) and why (`importMethodSource`: `request`, `projectFeature` or `default`).
 
 ## `semantic-layer edit` overwrote a concurrent change to another field
 
