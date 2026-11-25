@@ -2234,7 +2234,6 @@ class StorageService(ColumnDescriptionsMixin):
             Dict with export metadata and file info.
         """
         branch_id = resolve_branch(self._config_store, alias, branch_id)
-        from ..errors import KeboolaApiError
 
         if file_type not in ("csv", "parquet"):
             raise KeboolaApiError(
@@ -2244,8 +2243,7 @@ class StorageService(ColumnDescriptionsMixin):
                 retryable=False,
             )
 
-        projects = self.resolve_projects([alias])
-        project = projects[alias]
+        project = self.resolve_projects([alias])[alias]
 
         client = self._client_factory(project.stack_url, project.token)
         try:
@@ -2260,8 +2258,7 @@ class StorageService(ColumnDescriptionsMixin):
             )
 
             # Step 2: Get file ID from job results
-            file_info = job.get("results", {}).get("file", {})
-            file_id = file_info.get("id")
+            file_id = job.get("results", {}).get("file", {}).get("id")
             if not file_id:
                 raise KeboolaApiError(
                     message="Export job completed but no file ID in results",
