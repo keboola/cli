@@ -28,7 +28,9 @@ Placeholders used in every command:
 | `PK` | Primary key column |
 | `OTHER` | Every remaining column |
 | `WS_ID` | ID of the helper workspace |
-| `CFG_ID` | ID of the helper transformation (path B) |
+| `CFG_ID` | ID of the helper transformation (paths B and C) |
+| `PART_OLD`, `PART_NEW` | Partition expression on the old and on the new table (section 5) |
+| `START`, `END` | First partition of a range and first partition after it (path C) |
 | `JOB_ID` | ID of a Storage job |
 | `GCP_PROJECT` | Google Cloud project of the Keboola project |
 | `DATASET` | BigQuery dataset of bucket `B` |
@@ -143,11 +145,18 @@ kbagent --json storage bucket-detail --project ALIAS --bucket-id B | jq '.data |
 Refuse the table when `is_linked` is true. A linked bucket is read-only in
 this project, so it cannot hold `T_repart`.
 
-Five refuse rules need only these two results: the backend is not BigQuery,
+Six refuse rules need only these two results: the backend is not BigQuery,
 the bucket is linked, the table is an alias, `requirePartitionFilter` is
-true, or `data_size_bytes` is over 5 TiB ("Refuse rules" below). Check them
-now. A table that is refused here leaves nothing behind, because nothing was
-created yet.
+true, or the table takes path C and is cluster only or partitioned by
+ingestion time ("Refuse rules" below). Check them now. A table that is
+refused here leaves nothing behind, because nothing was created yet.
+
+`data_size_bytes` over 5 TiB (5,497,558,138,880 bytes) decides path C, the
+ranged copy (section 4, path C). A single copy of such a table can run past
+the 6-hour limit of a BigQuery query, so it is copied in ranges of the
+partition column. The owner may also choose path C for a smaller table, for
+example when a path A copy of a similar table took more than 4 hours. Record
+the reason for path C.
 
 ### Helper workspace
 
@@ -331,9 +340,13 @@ command above):
   REPEATED column (`type` and `mode` of `schema.fields` in the `bq show`
   output). `create-table --column` takes a name, a type and a length only,
   so path B cannot create such a column.
-- `data_size_bytes` is over 5 TiB (5,497,558,138,880 bytes). This version
-  does not convert such a table: it has no procedure that copies a table in
-  ranges. Hand the table to the owner.
+- The table takes path C (over 5 TiB, or the owner's choice) and has no
+  partition column: a cluster-only table has nothing to range on. Hand the
+  table to the owner.
+- The table takes path C and is partitioned by ingestion time
+  (`definition.timePartitioning` without a `field`). Its partition is not a
+  column, so neither the range filter nor the per-partition check can read
+  it. Hand the table to the owner.
 
 The only object that this section creates is the helper workspace, so a
 refused table leaves nothing behind once the workspace is deleted.
@@ -359,7 +372,7 @@ Replace it in every query of this runbook:
 | DATE | `COL` |
 | DATETIME | `DATE(COL)` |
 | TIMESTAMP | `DATE(COL)` (the UTC day, which is how BigQuery partitions a TIMESTAMP column) |
-| STRING (path B) | `SAFE.PARSE_DATE('%Y-%m-%d', COL)`, with the owner's format string in place of `%Y-%m-%d` |
+| STRING (paths B and C) | `SAFE.PARSE_DATE('%Y-%m-%d', COL)`, with the owner's format string in place of `%Y-%m-%d` |
 
 For a STRING column run the profile query of section 4a first.
 
@@ -378,7 +391,7 @@ A cluster-only table skips the query, but it still loads the view: sections
 Project alias:
 Table ID:
 Class (cluster only / column ready / column not ready):
-Path (A / B):
+Path (A / B / C; for C the reason: over 5 TiB or the owner's choice):
 rows_count:
 data_size_bytes:
 primary_key:
@@ -440,13 +453,20 @@ delete` command of section 1). No other object exists yet.
 
 BigQuery rejects a job that modifies more than 4,000 partitions. The limit is
 per job. So it binds the copy, and it also binds the output-mapping load of
-path B (section 4), which is a full load into the partitioned table.
+path B (section 4), which is a full load into the partitioned table. On path C
+it binds each range: a range covers at most 4,000 partitions.
 
 ## 3. Pause writers (owner)
 
 The owner stops every writer recorded in section 1: loads, Direct Grant
 output mapping writes, and streaming writers on the owner's side. The skill
 changes no configuration and pauses nothing.
+
+On path C the copy runs range by range, one job each, and can take days. The
+writers stay paused from the first range to the swap (section 6). Tell the
+owner how long the window is from the estimate of section 4, path C, step 5,
+before the owner pauses anything. That estimate needs the sample range, which
+is copied while the writers already pause: the sample is the first range.
 
 Check that no job runs before the copy:
 
@@ -661,6 +681,236 @@ With a type change, after the swap the owner changes the writers of `B.T`,
 so that they write a DATE into `COL`. The runbook does not change them.
 Without a type change the writers stay as they are.
 
+### Path C: ranged copy
+
+Path C applies when `data_size_bytes` is over 5 TiB, or when the owner chose
+it (section 1). It copies the table in ranges of the partition column, one
+transformation job per range, into the empty table of path B, step 4b. Each
+range stays far below the 6-hour limit of a BigQuery query. Section 1 refuses
+a path C table that is cluster only or partitioned by ingestion time.
+
+Path C reuses path B: the variant with or without a type change is decided
+the same way (the table at the top of path B), 4a runs for the variant with a
+type change, and the table is created by 4b. What differs is the fill: it
+runs once per range, with an incremental output mapping.
+
+`PART_OLD` and `PART_NEW` are the partition expressions of section 5, on the
+old and on the new table. Both follow the granularity of section 2.
+
+#### Step 1. Create the empty table
+
+Run 4a (variant with a type change only) and 4b exactly as on path B. Then
+load both tables into the helper workspace as views; the view of `T_repart`
+counts the rows of each range after its load:
+
+```bash
+kbagent --json workspace load --project ALIAS --workspace-id WS_ID --table-id B.T --table-id B.T_repart --load-type view
+```
+
+#### Step 2. Secure the empty table
+
+Run section 4c now, on the empty `B.T_repart`, not after the fill: the
+policy tags check and the IAM bindings. The copy fills over hours or days, and
+it must not hold rows without its tags and bindings in that time. When a step
+of 4c cannot be done, run the abort step (section 4d).
+
+#### Step 3. Plan the ranges
+
+Count the rows per partition of the new layout:
+
+```bash
+kbagent --json workspace query --project ALIAS --workspace-id WS_ID --full --sql "SELECT PART_OLD AS p, COUNT(*) AS n FROM T GROUP BY p ORDER BY p"
+```
+
+`--full` returns every row: the default stops at 500. A row with `p` NULL is
+the NULL partition.
+
+A range is a run of consecutive partitions from this list, half-open: it
+holds the rows with `START <= PART_OLD < END`. `START` is the first partition of
+the range, and `END` is the first partition of the next range. For the last
+range `END` is one granularity unit after its last partition (the next day,
+month or year). A range never splits a partition, so a failed range can be
+removed without touching its neighbours (step 6). The NULL partition is its
+own range, with the filter `COL IS NULL`. When section 1 counted
+`out_of_range` above 0, the rows with a date outside 1960-01-01 to 2159-12-31
+are one more range of their own, with the filter
+`DAY_EXPR < DATE '1960-01-01' OR DAY_EXPR > DATE '2159-12-31'` (`DAY_EXPR` of
+the table that is read). BigQuery holds them in one partition,
+`__UNPARTITIONED__`. The other ranges cover only dates in that interval.
+
+Each range covers at most 4,000 partitions (section 2). Start with one month
+of data per range for the sample (step 5), and size the other ranges from its
+measurement. The estimated size of a range is its rows divided by
+`rows_count`, times `data_size_bytes`.
+
+Write the range record and keep it up to date for the whole run:
+
+```text
+Range | START | END (exclusive) | Source rows | Copy rows | Job ID | Start time | End time | Duration | Status (todo / running / done / failed)
+1     |       |                 |             |           |        |            |          |          |
+NULL  | COL IS NULL                |       |           |        |            |          |          |
+OUT   | outside 1960-01-01 to 2159-12-31 |  |           |        |            |          |          |
+```
+
+Source rows of a range are the sum of `n` of its partitions. Their sum over
+all ranges equals the row count before the copy (section 3).
+
+#### Step 4. Create the transformation for the first range
+
+As in path B, "Fill the table with a transformation", with two differences:
+the `SELECT` has a range filter, and the output mapping is incremental, so
+each range adds rows to the copy instead of replacing it.
+
+```bash
+kbagent --json transformation create --project ALIAS --component-id keboola.google-bigquery-transformation \
+  --name "repartition T ranges" --sql "CREATE TABLE T_repart (PK STRING NOT NULL, COL DATE, C1 STRING, OTHER STRING) AS SELECT PK, PARSE_DATE('%Y-%m-%d', COL) AS COL, C1, OTHER FROM T WHERE PART_OLD >= DATE 'START' AND PART_OLD < DATE 'END'"
+kbagent --json transformation edit --project ALIAS --config-id CFG_ID --change-description "map repartition tables" \
+  --storage '{"input": {"tables": [{"source": "B.T", "destination": "T"}]}, "output": {"tables": [{"source": "T_repart", "destination": "B.T_repart", "primary_key": ["PK"], "incremental": true}]}}'
+kbagent --json transformation show --project ALIAS --config-id CFG_ID
+```
+
+The rules of path B for the `CREATE TABLE` column list, the full column list
+of the `SELECT` and `primary_key` hold unchanged. Without a type change the
+`SELECT` lists `COL` unchanged. The filter uses `PART_OLD`, the same expression
+as the range plan, so a row lands in exactly one range. The NULL range and
+the out-of-range range use their filters of step 3. The fill parses with
+`PARSE_DATE`, as on path B: a value that does not parse fails the range.
+
+`transformation show` prints the block and code IDs (`b0`, `b0.c0`) that
+step 6 edits.
+
+The output mapping has the primary key of the table, so each incremental load
+merges on it. A row that is loaded twice is not duplicated. The load of a
+later range compares against the rows already in the copy, so later ranges
+may take longer than the sample: record the duration of each.
+
+#### Step 5. Sample range
+
+Run the first range and time it:
+
+```bash
+kbagent --json job run --project ALIAS --component-id keboola.google-bigquery-transformation --config-id CFG_ID
+kbagent --json job detail --project ALIAS --job-id JOB_ID | jq '.data | {id, status, isFinished, startTime, endTime, durationSeconds}'
+```
+
+Run `job run` without `--wait`. With `--timeout`, kbagent kills the job when
+the timeout expires (exit 7, `JOB_TIMEOUT_TERMINATED`), and a range may run
+for hours. Take `JOB_ID` from the output of `job run`, and repeat
+`job detail` until `isFinished` is true.
+
+Then count the rows of the range in the copy:
+
+```bash
+kbagent --json workspace query --project ALIAS --workspace-id WS_ID --sql "SELECT COUNT(*) AS copy_rows FROM T_repart WHERE PART_NEW >= DATE 'START' AND PART_NEW < DATE 'END'"
+```
+
+The NULL range and the out-of-range range use their filters of step 3, with
+`COL` of the new table. The range is `done`
+when the job ended with `success` and `copy_rows` equals its source rows.
+Record the job ID, the times and `durationSeconds` in the range record.
+
+From the sample:
+
+- rate = source rows of the sample / `durationSeconds`.
+- Size the other ranges so that each holds at most rate x 2 hours of rows,
+  and at most 4,000 partitions. Fewer ranges cost less (see "Cost" below).
+- Estimated total time = sum over the ranges of (rows of the range / rate).
+  Tell the owner, together with the length of the writers' pause.
+
+When the sample took more than 4 hours, stop and ask the owner before any
+other range. The owner chooses smaller ranges or ends the conversion (abort,
+section 4d).
+
+The first measurement includes the input mapping of `B.T` into the
+transformation. Whether a BigQuery transformation reads its input table as a
+view or copies it was not verified for this runbook. When the sample is far
+slower than its share of the table suggests, read the job events
+(`kbagent --json job detail --project ALIAS --job-id JOB_ID --log-tail-lines 50`)
+and stop when the input mapping copies the table: every range would then
+copy all of it.
+
+#### Step 6. The other ranges
+
+For each range in order, set the filter of the range and run it:
+
+```bash
+kbagent --json transformation edit --project ALIAS --config-id CFG_ID --change-description "range START to END" --op-file range.json
+kbagent --json job run --project ALIAS --component-id keboola.google-bigquery-transformation --config-id CFG_ID
+kbagent --json job detail --project ALIAS --job-id JOB_ID | jq '.data | {id, status, isFinished, startTime, endTime, durationSeconds}'
+```
+
+`range.json` is a JSON array with one operation. It replaces the script of
+the transformation with the statement of step 4 and the filter of this range:
+
+```json
+[{"op": "set_code", "block_id": "b0", "code_id": "b0.c0", "script": "CREATE TABLE T_repart (PK STRING NOT NULL, COL DATE, C1 STRING, OTHER STRING) AS SELECT PK, PARSE_DATE('%Y-%m-%d', COL) AS COL, C1, OTHER FROM T WHERE PART_OLD >= DATE 'START' AND PART_OLD < DATE 'END'"}]
+```
+
+Each `transformation edit` and each `job run` is a write and waits for its
+own yes, like every write of this runbook.
+
+After each job, count the copy rows of the range (step 5) and update the range
+record. Start the next range only when this one is `done`.
+
+When a range runs longer than 4 hours, stop and ask the owner. Do not start
+the next range. The owner decides whether to wait or to end the job:
+
+```bash
+kbagent --json job terminate --project ALIAS --job-id JOB_ID --dry-run
+kbagent --json job terminate --project ALIAS --job-id JOB_ID --yes
+```
+
+#### Resume after a failed range
+
+A range whose job ended in any status other than `success`, or whose
+`copy_rows` differs from its source rows, is `failed`. The ranges before it
+stay `done`. Resume from the first range that is not `done`:
+
+1. Confirm with `job detail` that the job of the failed range has
+   `isFinished` true. Never start a range while one still runs.
+2. Count the copy rows of the failed range (step 5). The load of a range is
+   not one transaction, so a failed job can leave part of its rows in the
+   copy.
+3. When the count is above 0, a person removes them. This is a `bq` write: the
+   agent prints the command, waits for the person to confirm that it ran, and
+   counts again. A person runs:
+
+   ```bash
+   bq --project_id=GCP_PROJECT query --use_legacy_sql=false 'DELETE FROM DATASET.T_repart WHERE PART_NEW >= DATE "START" AND PART_NEW < DATE "END"'
+   ```
+
+   The NULL range and the out-of-range range use their filters of step 3.
+   The count of step 5 must then be 0.
+4. Run the range again (step 6), with the owner's yes for the retry.
+
+When the same range fails twice, stop and ask the owner. Ending the
+conversion is the abort step (section 4d).
+
+The `DELETE` goes around Storage, so `rows_count` of `B.T_repart` may be
+wrong until the next load. Section 5 counts the rows with a query and does not
+rely on it.
+
+#### Step 7. After the last range
+
+Every range of the record is `done`. Delete the helper configuration:
+
+```bash
+kbagent --json config delete --project ALIAS --component-id keboola.google-bigquery-transformation --config-id CFG_ID
+```
+
+Then continue with section 5. Section 4c already ran on the empty table, and
+section 5 checks its result again on the full copy.
+
+#### Cost
+
+- Each range reads the source. When the source is not partitioned by `COL`,
+  each range bills a full scan of every column, so the scan cost is the number
+  of ranges times one full scan. Plan the fewest ranges that stay under the
+  time budget of step 5, and tell the owner the estimate before the loop.
+- Each incremental load with a primary key merges into the copy, and its cost
+  grows with the rows already in it.
+- The writers stay paused for the whole copy, the validation and the swap.
+
 ## 4c. Secure the copy before the swap (a person with BigQuery access)
 
 **A person runs every `bq` command in this section that writes. The agent
@@ -669,6 +919,8 @@ confirm that it was run, and then reads the result. It never runs the command
 itself.**
 
 This section runs after the copy of path A or path B, and before section 5.
+On path C it runs on the empty table, before the first range (section 4,
+path C, step 2), and section 5 checks its result again.
 The table must never be under the production name without its policy tags
 and its IAM bindings. A rename keeps both on the renamed table, so they are
 put on the copy first. A table with a row access policy never reaches this
@@ -707,7 +959,8 @@ step (section 4d), and refuse the table.
 ## 4d. Abort before the swap
 
 Every stop between the copy and the swap ends here: a failed path A copy, a
-failed path B job, a missing policy tag (section 4b or 4c), a step of section 4c that cannot be
+failed path B job, a path C copy that the owner ends instead of resuming, a
+missing policy tag (section 4b or 4c), a step of section 4c that cannot be
 done, a failed check of section 5. Until this step runs, `B.T_repart` is a
 full second copy of the data, personal data included, possibly without its
 policy tags, and readable by every dataset reader.
@@ -728,12 +981,14 @@ kbagent --json workspace delete --project ALIAS --workspace-id WS_ID --yes
 - The copy goes first: it is the object that holds data. After a failed
   path A copy the table may not exist: when `table-detail` answers
   `NOT_FOUND`, skip both `delete-table` commands.
-- `config delete` applies to path B only, and only when `CFG_ID` exists:
+- `config delete` applies to paths B and C, and only when `CFG_ID` exists:
   skip it when the abort came before `transformation create` (the policy-tag
   check on the empty table), and when section 4 already deleted the
   configuration.
 - After a failed or timed-out fill job, the job is finished before this
-  step starts (section 4, "Fill the table with a transformation").
+  step starts (section 4, "Fill the table with a transformation"). On path C
+  this holds for the job of every range: `isFinished` is true (the
+  `job detail` command of path C, step 5).
 - Read `B.T` once more with `storage table-detail` and confirm that it is
   unchanged: the layout and `rows_count` of section 1.
 - Tell the owner that the dropped copy stays reachable through BigQuery time
@@ -754,13 +1009,13 @@ helper workspace.
 - **Row count.** `old_rows` equals `new_rows`, and both equal the row count
   recorded right before the copy (section 3). A difference means that a
   write landed.
-- **Columns and types.** The column list and the types are equal. Path B
-  with a type change: only `COL` differs, and it is `DATE`. Path B without a
-  type change: no column differs.
+- **Columns and types.** The column list and the types are equal. Path B or
+  C with a type change: only `COL` differs, and it is `DATE`. Path B or C
+  without a type change: no column differs.
 - **Length.** `column_details[].length` of each column equals the value
   recorded for `B.T` in section 1. A column that has a length on one table
-  and none, or another one, on the other table is a mismatch. Path B with a
-  type change: `COL` is left out, because its type changes.
+  and none, or another one, on the other table is a mismatch. Path B or C
+  with a type change: `COL` is left out, because its type changes.
 - **Nullability.** `column_details[].nullable` of each column equals the
   value recorded for `B.T` in section 1. A column that is NOT NULL on one
   table and nullable on the other is a mismatch: after the swap the table
@@ -768,6 +1023,8 @@ helper workspace.
 - **Primary key.** `primary_key` is equal.
 - **Column defaults.** `column_details[].default` of each column equals the
   value recorded for `B.T` in section 1. A missing default is a mismatch.
+- **Path C, ranges.** Every range of the range record is `done`, and its copy
+  rows equal its source rows.
 - **Layout.** `definition.timePartitioning` and `definition.clustering` of the
   copy are as requested, `timePartitioning.expirationMs` included when
   section 1 recorded one.
@@ -776,7 +1033,7 @@ helper workspace.
   with a tag that the copy lacks stops the conversion. `policyTagState` is
   not part of this check.
 - **Table IAM bindings.** The bindings of the copy equal the recorded ones.
-- **Path B with a type change, NULL count.** The count of NULL in `COL` is
+- **Path B or C with a type change, NULL count.** The count of NULL in `COL` is
   equal on both tables. The per-partition query below cannot show this: it
   parses `COL` of the old table, so a string that does not parse and a NULL
   land in the same group. Count the NULLs directly:
@@ -791,8 +1048,10 @@ kbagent cannot read IAM bindings. The operator reads them on the copy:
 bq --project_id=GCP_PROJECT get-iam-policy --format=prettyjson DATASET.T_repart
 ```
 
-Every partitioned table, on path A and on path B, also gets a row count per
-partition. A cluster-only table has no partitions and skips it.
+Every partitioned table, on paths A, B and C, also gets a row count per
+partition. A cluster-only table has no partitions and skips it. On path C
+(every table over 5 TiB) the check is required, like every other check
+here.
 
 ```bash
 kbagent --json workspace query --project ALIAS --workspace-id WS_ID --full --sql "SELECT p, SUM(old_c) AS old_rows, SUM(new_c) AS new_rows FROM (SELECT PART_OLD AS p, COUNT(*) AS old_c, 0 AS new_c FROM T GROUP BY p UNION ALL SELECT PART_NEW AS p, 0 AS old_c, COUNT(*) AS new_c FROM T_repart GROUP BY p) GROUP BY p HAVING SUM(old_c) != SUM(new_c)"
@@ -813,10 +1072,11 @@ that table:
 
 - Path A: `COL` has the same type on both tables, so `PART_OLD` and
   `PART_NEW` are the same expression.
-- Path B with a type change: on the old table `COL` is a STRING, so
+- Path B or C with a type change: on the old table `COL` is a STRING, so
   `PART_OLD` uses `SAFE.PARSE_DATE` with the format string of section 4a. On
   the new table `COL` is a DATE, so `PART_NEW` uses `COL`.
-- Path B without a type change: as on path A, both are the same expression.
+- Path B or C without a type change: as on path A, both are the same
+  expression.
 
 Rows with NULL in `COL` form one group with `p` NULL on each table, and the
 query compares the two groups like any other partition. An empty result
@@ -975,7 +1235,7 @@ bindings. The operator reads the bindings and the policy tags once more on
 on a difference from the values recorded in section 1. The aliases that the owner created again after the first swap now
 read `B.T_repart`: the owner deletes them and creates them again on `B.T`
 (section 6, step 4). A person creates the search indexes again
-(section 6, step 3). After a rollback of path B with a type change the owner also reverts the
+(section 6, step 3). After a rollback of path B or C with a type change the owner also reverts the
 writers to STRING. The rows that were loaded after the first swap hold a
 DATE in `COL`: the owner formats them back with the format string
 (`FORMAT_DATE`) when loading them into `B.T` again.
@@ -1046,14 +1306,15 @@ recorded in section 1:
   rollback swap was finished, or the first swap was undone). Do not use the
   steps of section 6. Continue with the steps after the rollback in section
   8: the IAM bindings and policy tags, the search indexes, the aliases and,
-  on path B, the writers. After an undone first swap `B.T_repart` is the
+  on path B or C with a type change, the writers. After an undone first swap `B.T_repart` is the
   copy again: run the abort step (section 4d) or start again at section 5.
 
 ## 10. Cost and record
 
-- The copy bills one full scan of the table.
+- The copy bills one full scan of the table. Path C bills one scan of the
+  source per range, plus the load of each range (section 4, path C, "Cost").
 - Storage is doubled until the drop on day 7.
 - The copy is active storage for 90 days.
 
 Record for the pilot: the copy duration, the swap duration, the row counts,
-and the layout before and after.
+and the layout before and after. On path C also the range record.
