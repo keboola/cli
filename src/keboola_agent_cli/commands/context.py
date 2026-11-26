@@ -1130,12 +1130,14 @@ To start or restart an app from a flow, add a `keboola.data-app-control` task
 """,
     "init": """\
   init
-    Create local .kbagent/ workspace. --from-global copies existing projects
+    Create local .kbagent/ workspace. --from-global copies static-token projects
     (a one-time copy of the tokens: after a rotation in the global config,
     run `project refresh` in the workspace);
     --project ALIAS (repeatable) copies only the named project(s) and implies
     --from-global. When the global active project is not copied, the
     workspace has no active project (`active_project_cleared`, since 0.100.0).
+    If the selection includes a browser-login project, init refuses (since vNEXT).
+    Initialize without copying it and run `auth login --stack STACK_URL --register-projects` locally.
 """,
     "job": """\
 #### Job History
