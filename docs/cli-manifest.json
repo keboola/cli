@@ -1805,8 +1805,8 @@
       "category": "admin",
       "help": "Initialize a local .kbagent/ workspace in the current directory.",
       "params": [
-        {"kind": "option", "name": "from_global", "opts": ["--from-global"], "type": "boolean", "is_flag": true, "default": false, "help": "Copy projects (tokens included) from the global config into the new local workspace. A one-time copy: after a token rotation in the global config, run `kbagent project refresh` in the workspace to take the new tokens."},
-        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "multiple": true, "default": null, "help": "Projects to copy from the global config, repeatable (implies --from-global; without it, all global projects are copied)"},
+        {"kind": "option", "name": "from_global", "opts": ["--from-global"], "type": "boolean", "is_flag": true, "default": false, "help": "Copy projects and their static tokens from the global config into the new local workspace. Browser-login projects cannot be copied. A one-time copy: after a token rotation in the global config, run `kbagent project refresh` in the workspace."},
+        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "multiple": true, "default": null, "help": "Projects to copy from the global config, repeatable (implies --from-global; without it, all global projects are selected)"},
         {"kind": "option", "name": "read_only", "opts": ["--read-only"], "type": "boolean", "is_flag": true, "default": false, "help": "Set read-only permission policy (blocks all write CLI commands)."}
       ]
     },

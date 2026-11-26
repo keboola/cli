@@ -10,6 +10,7 @@ from typing import Any
 import typer
 from rich.console import Console
 
+from ..auth.sentinel import is_session_token
 from ..config_store import ConfigStore
 from ..constants import ENV_PROJECT_FROM_ENV, LOCAL_CONFIG_DIR_NAME
 from ..errors import ErrorCode
@@ -24,16 +25,16 @@ def init_command(
     from_global: bool = typer.Option(
         False,
         "--from-global",
-        help="Copy projects (tokens included) from the global config into the new local "
-        "workspace. A one-time copy: after a token rotation in the global config, run "
-        "`kbagent project refresh` in the workspace to take the new tokens.",
+        help="Copy projects and their static tokens from the global config into the new local "
+        "workspace. Browser-login projects cannot be copied. A one-time copy: after a token "
+        "rotation in the global config, run `kbagent project refresh` in the workspace.",
     ),
     project: list[str] | None = typer.Option(
         None,
         "--project",
         "-p",
         help="Projects to copy from the global config, repeatable (implies --from-global; "
-        "without it, all global projects are copied)",
+        "without it, all global projects are selected)",
     ),
     read_only: bool = typer.Option(
         False,
@@ -102,6 +103,22 @@ def init_command(
             config = _filter_global_projects(config, selected_aliases, formatter)
             if global_default and not config.default_project:
                 active_project_cleared = global_default
+        session_aliases = [
+            alias for alias, entry in config.projects.items() if is_session_token(entry.token)
+        ]
+        if session_aliases:
+            formatter.error(
+                message=(
+                    "Cannot copy browser-login project(s) into a local workspace: "
+                    f"{', '.join(session_aliases)}. Browser-login sessions belong to the "
+                    "config directory where you signed in. Use --project to select only "
+                    "static-token projects, or run 'kbagent init' without copying projects "
+                    "then 'kbagent auth login --stack STACK_URL --register-projects' "
+                    "in the workspace."
+                ),
+                error_code=ErrorCode.CONFIG_ERROR,
+            )
+            raise typer.Exit(code=5)
 
     if read_only and len(config.projects) == 0:
         # Read-only locks the config (chmod 0400 + cli:write deny), so an empty

@@ -8396,6 +8396,41 @@ class TestInit:
         assert output["error"]["code"] == "CONFIG_ERROR"
         assert "not the global config" in output["error"]["message"]
 
+    @pytest.mark.parametrize("options", [("--from-global",), ("--project", "browser-project")])
+    def test_init_from_global_rejects_session_projects(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, options: tuple[str, ...]
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("KBAGENT_CONFIG_DIR", raising=False)
+
+        global_dir = tmp_path / "global-config"
+        self._seed_global_with_three(global_dir)
+        global_store = ConfigStore(config_dir=global_dir, source="global")
+        global_store.add_project(
+            "browser-project",
+            ProjectConfig(
+                stack_url="https://connection.keboola.com",
+                token=make_session_token(42),
+                project_id=42,
+            ),
+        )
+
+        with patch("keboola_agent_cli.cli.resolve_config_dir", return_value=(global_dir, "global")):
+            rejected = runner.invoke(app, ["--json", "init", *options])
+            assert rejected.exit_code == 5, rejected.output
+            error = json.loads(rejected.output)["error"]
+            assert error["code"] == "CONFIG_ERROR"
+            assert "browser-project" in error["message"]
+            assert "auth login --stack STACK_URL --register-projects" in error["message"]
+            assert not (tmp_path / ".kbagent").exists()
+            assert not (tmp_path / ".gitignore").exists()
+
+            accepted = runner.invoke(app, ["--json", "init", "--project", "marketing"])
+
+        assert accepted.exit_code == 0, accepted.output
+        local_config = ConfigStore(config_dir=tmp_path / ".kbagent").load()
+        assert set(local_config.projects) == {"marketing"}
+
     def test_init_from_global_rejects_ephemeral_env_project(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
