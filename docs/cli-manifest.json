@@ -1051,6 +1051,63 @@
       ]
     },
     {
+      "path": "data-app env-get",
+      "kind": "command",
+      "hidden": false,
+      "category": "read",
+      "help": "Show ONE plain (unencrypted) env var of a data app, with its value.\n\nA key with '#' is refused: use 'data-app secrets-get' for secrets.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
+        {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
+        {"kind": "option", "name": "key", "opts": ["--key"], "type": "text", "required": true, "default": null, "help": "Plain env var key (no '#')."},
+        {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Storage branch ID for the linked config (defaults to production)."}
+      ]
+    },
+    {
+      "path": "data-app env-list",
+      "kind": "command",
+      "hidden": false,
+      "category": "read",
+      "help": "List the plain (unencrypted) env vars of a data app, with their values.\n\nLists the keys without '#' in parameters.dataApp.secrets. Encrypted\nsecrets are listed by 'data-app secrets-list'.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
+        {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
+        {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Storage branch ID for the linked config (defaults to production)."},
+        {"kind": "option", "name": "limit", "opts": ["--limit", "-L"], "type": "integer", "default": 100, "help": "Max env vars to return, sorted by key (default 100)."}
+      ]
+    },
+    {
+      "path": "data-app env-remove",
+      "kind": "command",
+      "hidden": false,
+      "category": "destructive",
+      "help": "Remove plain (unencrypted) env vars from a data app. A missing key is exit 0.\n\nThe config version history keeps the old values. The app can break at the\nnext deploy if it needs the variable; the command never deploys. A key\nwith '#' is refused: use 'data-app secrets-remove' for secrets.",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
+        {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
+        {"kind": "option", "name": "key", "opts": ["--key"], "type": "text", "required": true, "multiple": true, "default": null, "help": "Plain env var key to remove (no '#'). Repeatable."},
+        {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Storage branch ID for the linked config (defaults to production)."},
+        {"kind": "option", "name": "yes", "opts": ["--yes", "-y"], "type": "boolean", "is_flag": true, "default": false, "help": "Skip the confirmation prompt."},
+        {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Preview the Storage PUT body without making the call."}
+      ]
+    },
+    {
+      "path": "data-app env-set",
+      "kind": "command",
+      "hidden": false,
+      "category": "write",
+      "help": "Write plain (unencrypted) env vars to the linked Storage config.\n\nThe value is stored in clear under the key without '#'. Use it for values\nthat are not secret; use 'data-app secrets-set' for secrets. A key with\n'#' is refused, and so is a key whose runtime env var name an encrypted\nsecret already has (remove the secret first with 'data-app secrets-remove').\nThe runtime env var name is the key uppercased with '-' replaced by '_'.\n\nThe command never deploys: the running container keeps the old config\nuntil the next 'kbagent data-app deploy'.\n\nExample: kbagent data-app env-set --project prod --app-id 123 --var LOG_LEVEL=debug",
+      "params": [
+        {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
+        {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
+        {"kind": "option", "name": "var", "opts": ["--var"], "type": "text", "multiple": true, "default": null, "help": "Plain env var as 'KEY=VALUE' (no '#'; stored in clear). Repeatable. Mutually exclusive with --var-file."},
+        {"kind": "option", "name": "var_file", "opts": ["--var-file"], "type": "file", "default": null, "help": "Read a JSON object mapping 'KEY' -> 'value' from a file (- for stdin)."},
+        {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Storage branch ID for the linked config (defaults to production)."},
+        {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Show the Storage PUT body without making the call."},
+        {"kind": "option", "name": "no_hint_next", "opts": ["--no-hint-next"], "type": "boolean", "is_flag": true, "default": false, "help": "Suppress the 'now run kbagent data-app deploy' hint in the output."}
+      ]
+    },
+    {
       "path": "data-app git-auth-set",
       "kind": "command",
       "hidden": false,
@@ -1202,12 +1259,12 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Encrypt and write app-runtime secrets to the linked Storage config.\n\nThe '#'-prefix is required on every key (Keboola encryption convention).\nThe runtime exposes each secret as an env var with '#' stripped, '-'\nreplaced with '_', and uppercased ('#my-api-key' -> 'MY_API_KEY').\n\nThe command never auto-deploys; the running container keeps the old\nconfig until the next 'kbagent data-app deploy' call.\n\nReference: https://help.keboola.com/data-apps/python-js/",
+      "help": "Encrypt and write app-runtime secrets to the linked Storage config.\n\nEvery value is stored encrypted under a '#' key. The '#' prefix is\noptional on input: 'API_KEY=...' is stored as '#API_KEY'. The runtime\nexposes each secret as an env var with '#' stripped, '-' replaced with\n'_', and uppercased ('#my-api-key' -> 'MY_API_KEY'). A key whose env var\nname a plain env var already has is refused: remove it with\n'data-app env-remove' first. For values that are not secret, use\n'data-app env-set'.\n\nThe command never auto-deploys; the running container keeps the old\nconfig until the next 'kbagent data-app deploy' call.\n\nReference: https://help.keboola.com/data-apps/python-js/",
       "params": [
         {"kind": "option", "name": "project", "opts": ["--project", "-p"], "type": "text", "default": null, "help": "Project alias or ID (default: KBAGENT_PROJECT, then the active project, then the sole project)"},
         {"kind": "option", "name": "app_id", "opts": ["--app-id"], "type": "text", "required": true, "default": null, "help": "Data Science numeric app id"},
-        {"kind": "option", "name": "secret", "opts": ["--secret"], "type": "text", "multiple": true, "default": null, "help": "One or more '#KEY=VALUE' plaintext entries. Repeatable. Mutually exclusive with --secret-file."},
-        {"kind": "option", "name": "secrets_file", "opts": ["--secret-file"], "type": "file", "default": null, "help": "Read a JSON object mapping '#KEY' -> 'plaintext value' from a file (- for stdin)."},
+        {"kind": "option", "name": "secret", "opts": ["--secret"], "type": "text", "multiple": true, "default": null, "help": "One or more 'KEY=VALUE' plaintext entries. Repeatable. The '#' prefix is optional: every value is stored encrypted under '#KEY'. Mutually exclusive with --secret-file."},
+        {"kind": "option", "name": "secrets_file", "opts": ["--secret-file"], "type": "file", "default": null, "help": "Read a JSON object mapping 'KEY' -> 'plaintext value' from a file (- for stdin). The '#' prefix is optional, as with --secret."},
         {"kind": "option", "name": "branch", "opts": ["--branch"], "type": "integer", "default": null, "help": "Storage branch ID for the linked config (defaults to production)."},
         {"kind": "option", "name": "allow_plaintext_on_encrypt_failure", "opts": ["--allow-plaintext-on-encrypt-failure"], "type": "boolean", "is_flag": true, "default": false, "help": "Bootstrap/debug only: write the value as-is if the Encryption API did not return a project-scoped ciphertext. NEVER use in production."},
         {"kind": "option", "name": "dry_run", "opts": ["--dry-run"], "type": "boolean", "is_flag": true, "default": false, "help": "Show the encryption request and Storage PUT body without making either call."},

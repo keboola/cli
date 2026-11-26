@@ -29,6 +29,7 @@ from ._helpers import (
     get_service,
     map_error_to_exit_code,
     parse_json_file_arg,
+    warn_deprecated,
 )
 from ._project_ref import PROJECT_HELP
 
@@ -36,47 +37,49 @@ from ._project_ref import PROJECT_HELP
 _REF_STORAGE_ACCESS = "https://help.keboola.com/data-apps/storage-access/"
 
 
-def _parse_secret_arg(arg: str) -> tuple[str, str]:
-    """Split ``#KEY=VALUE`` into ``(key, value)``.
+def _parse_secret_arg(arg: str, option: str = "--secret") -> tuple[str, str]:
+    """Split ``KEY=VALUE`` (or ``#KEY=VALUE``) into ``(key, value)``.
 
     The value may contain ``=``; only the FIRST ``=`` is the separator.
+    ``option`` names the option in the error (``--secret`` or ``--var``).
     """
     if "=" not in arg:
         raise typer.BadParameter(
-            f"Expected '#KEY=VALUE'; got {arg!r} (no '=' separator).",
-            param_hint="--secret",
+            f"Expected 'KEY=VALUE'; got {arg!r} (no '=' separator).",
+            param_hint=option,
         )
     key, _, value = arg.partition("=")
     if not key:
         raise typer.BadParameter(
-            f"Empty secret key in {arg!r}; expected '#KEY=VALUE'.",
-            param_hint="--secret",
+            f"Empty key in {arg!r}; expected 'KEY=VALUE'.",
+            param_hint=option,
         )
     return key, value
 
 
-def _read_secrets_file(path: Path) -> dict[str, str]:
+def _read_secrets_file(path: Path, option: str = "--secret-file") -> dict[str, str]:
+    """Read a JSON object of KEY -> text value; ``option`` names the option in errors."""
     try:
-        parsed = parse_json_file_arg(path, label="--secret-file")
+        parsed = parse_json_file_arg(path, label=option)
     except ValueError as exc:
-        raise typer.BadParameter(str(exc), param_hint="--secret-file") from exc
+        raise typer.BadParameter(str(exc), param_hint=option) from exc
     if not isinstance(parsed, dict):
         raise typer.BadParameter(
-            f"Secrets file {path} must be a JSON object mapping #KEY -> value.",
-            param_hint="--secret-file",
+            f"File {path} must be a JSON object mapping KEY -> value.",
+            param_hint=option,
         )
     out: dict[str, str] = {}
     for key, value in parsed.items():
         if not isinstance(key, str) or not isinstance(value, str):
             raise typer.BadParameter(
-                f"Secrets file {path} contains non-string entry for {key!r}.",
-                param_hint="--secret-file",
+                f"File {path} contains non-string entry for {key!r}.",
+                param_hint=option,
             )
         out[key] = value
     if not out:
         raise typer.BadParameter(
-            f"Secrets file {path} is empty.",
-            param_hint="--secret-file",
+            f"File {path} is empty.",
+            param_hint=option,
         )
     return out
 
@@ -89,14 +92,18 @@ def data_app_secrets_set(
         None,
         "--secret",
         help=(
-            "One or more '#KEY=VALUE' plaintext entries. Repeatable. "
+            "One or more 'KEY=VALUE' plaintext entries. Repeatable. The '#' prefix is "
+            "optional: every value is stored encrypted under '#KEY'. "
             "Mutually exclusive with --secret-file."
         ),
     ),
     secrets_file: Path | None = typer.Option(
         None,
         "--secret-file",
-        help="Read a JSON object mapping '#KEY' -> 'plaintext value' from a file (- for stdin).",
+        help=(
+            "Read a JSON object mapping 'KEY' -> 'plaintext value' from a file (- for stdin). "
+            "The '#' prefix is optional, as with --secret."
+        ),
         readable=True,
         dir_okay=False,
         allow_dash=True,
@@ -128,9 +135,13 @@ def data_app_secrets_set(
 ) -> None:
     """Encrypt and write app-runtime secrets to the linked Storage config.
 
-    The '#'-prefix is required on every key (Keboola encryption convention).
-    The runtime exposes each secret as an env var with '#' stripped, '-'
-    replaced with '_', and uppercased ('#my-api-key' -> 'MY_API_KEY').
+    Every value is stored encrypted under a '#' key. The '#' prefix is
+    optional on input: 'API_KEY=...' is stored as '#API_KEY'. The runtime
+    exposes each secret as an env var with '#' stripped, '-' replaced with
+    '_', and uppercased ('#my-api-key' -> 'MY_API_KEY'). A key whose env var
+    name a plain env var already has is refused: remove it with
+    'data-app env-remove' first. For values that are not secret, use
+    'data-app env-set'.
 
     The command never auto-deploys; the running container keeps the old
     config until the next 'kbagent data-app deploy' call.
@@ -151,7 +162,7 @@ def data_app_secrets_set(
 
     if not secret and not secrets_file:
         formatter.error(
-            message=("Provide at least one --secret '#KEY=VALUE' or --secret-file PATH."),
+            message=("Provide at least one --secret 'KEY=VALUE' or --secret-file PATH."),
             error_code=ErrorCode.MISSING_PARAMETER,
         )
         raise typer.Exit(code=2) from None
@@ -268,6 +279,9 @@ def data_app_secrets_list(
         formatter.error(message=exc.message, error_code=ErrorCode.CONFIG_ERROR)
         raise typer.Exit(code=5) from None
 
+    if any(entry.get("kind") == "env" for entry in result["secrets"]):
+        warn_deprecated(formatter, "data-app secrets-list plain-key")
+
     if formatter.json_mode:
         formatter.output(result)
         return
@@ -283,6 +297,8 @@ def data_app_secrets_list(
         marker = (
             " [yellow](shadowed by runtime)[/yellow]" if entry.get("shadowed_by_runtime") else ""
         )
+        if entry.get("kind") == "env":
+            marker += " [dim](plain env var)[/dim]"
         line = f"  [bold]{entry['key']}[/bold] -> env [cyan]{entry['env_var']}[/cyan]{marker}"
         if "fingerprint" in entry:
             line += f"  [dim]fingerprint={entry['fingerprint']}  prefix={entry.get('encryption_prefix', '')}[/dim]"
@@ -315,6 +331,8 @@ def data_app_secrets_get(
     formatter = get_formatter(ctx)
     branch = resolve_branch(ctx.obj["config_store"], project, branch, ignore_active_branch=True)
     service = get_service(ctx, "data_app_service")
+    if not key.startswith("#"):
+        warn_deprecated(formatter, "data-app secrets-get plain-key")
     try:
         result = service.get_data_app_secret(
             alias=project,
@@ -343,7 +361,8 @@ def data_app_secrets_get(
         formatter.console.print(f"  value (plaintext, unencrypted): {result['value']}")
         formatter.err_console.print(
             "  [yellow]Note:[/yellow] this value is stored unencrypted in the config. "
-            "Use `data-app secrets-set '#KEY=...'` to store sensitive values encrypted."
+            "Use `data-app env-get` for plain env vars, and `data-app secrets-set` "
+            "to store sensitive values encrypted."
         )
     if result.get("shadowed_by_runtime"):
         # Same stdout/stderr-separation rationale as secrets-set: keep
@@ -386,6 +405,9 @@ def data_app_secrets_remove(
     formatter = get_formatter(ctx)
     branch = resolve_branch(ctx.obj["config_store"], project, branch, ignore_active_branch=True)
     service = get_service(ctx, "data_app_service")
+
+    if any(not k.startswith("#") for k in key):
+        warn_deprecated(formatter, "data-app secrets-remove plain-key")
 
     if not dry_run:
         _confirm_or_abort(

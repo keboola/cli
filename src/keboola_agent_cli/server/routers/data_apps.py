@@ -1,4 +1,4 @@
-"""Data App endpoints (lifecycle, secrets, password)."""
+"""Data App endpoints (lifecycle, secrets, env vars, password)."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict
 
 from ...services.base import resolve_fanout_aliases
 from ..dependencies import ALL_PROJECTS_HELP, ServiceRegistry, get_registry
+from ..response_meta import warn_deprecated
 
 router = APIRouter(prefix="/data-apps", tags=["data-apps"])
 
@@ -80,6 +81,26 @@ class SecretsMerge(SecretsSet):
 
 
 class SecretsRemove(BaseModel):
+    keys: list[str]
+    branch_id: int | None = None
+    dry_run: bool = False
+
+
+class EnvMerge(BaseModel):
+    """The body of ``PATCH .../env``: undeclared fields are refused (spec V5)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    env: dict[str, str]
+    branch_id: int | None = None
+    dry_run: bool = False
+
+
+class EnvRemove(BaseModel):
+    """The body of ``POST .../env/remove``: undeclared fields are refused (spec V5)."""
+
+    model_config = ConfigDict(extra="forbid")
+
     keys: list[str]
     branch_id: int | None = None
     dry_run: bool = False
@@ -319,12 +340,15 @@ def secrets_list(
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """List secret keys configured on a data app. Mirrors `kbagent data-app secrets-list`."""
-    return registry.data_app.list_data_app_secrets(
+    result = registry.data_app.list_data_app_secrets(
         alias=project,
         app_id=app_id,
         branch_id=branch_id,
         show_fingerprint=show_fingerprint,
     )
+    if any(entry.get("kind") == "env" for entry in result["secrets"]):
+        warn_deprecated("data-app secrets-list plain-key")
+    return result
 
 
 @router.get("/{project}/{app_id}/secrets/{key:path}", summary="Get a single data app secret")
@@ -336,6 +360,8 @@ def secrets_get(
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """Read a single secret value on a data app. Mirrors `kbagent data-app secrets-get`."""
+    if not key.startswith("#"):
+        warn_deprecated("data-app secrets-get plain-key")
     return registry.data_app.get_data_app_secret(
         alias=project, app_id=app_id, key=key, branch_id=branch_id
     )
@@ -376,7 +402,71 @@ def secrets_remove(
     registry: ServiceRegistry = Depends(get_registry),
 ) -> dict[str, Any]:
     """Remove one or more secrets from a data app. Mirrors `kbagent data-app secrets-remove`."""
+    if any(not key.startswith("#") for key in body.keys):
+        warn_deprecated("data-app secrets-remove plain-key")
     return registry.data_app.remove_data_app_secrets(
+        alias=project,
+        app_id=app_id,
+        keys=body.keys,
+        branch_id=body.branch_id,
+        dry_run=body.dry_run,
+    )
+
+
+@router.get("/{project}/{app_id}/env", summary="List data app plain env vars")
+def env_list(
+    project: str,
+    app_id: str,
+    branch_id: int | None = None,
+    limit: int = Query(100, ge=1, description="Max env vars to return, sorted by key."),
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """List the plain (non-'#') env vars with their values. Mirrors `kbagent data-app env-list`."""
+    return registry.data_app.list_data_app_env(
+        alias=project, app_id=app_id, branch_id=branch_id, limit=limit
+    )
+
+
+@router.get("/{project}/{app_id}/env/{key}", summary="Get a data app plain env var")
+def env_get(
+    project: str,
+    app_id: str,
+    key: str,
+    branch_id: int | None = None,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Read one plain env var with its value. Mirrors `kbagent data-app env-get`."""
+    return registry.data_app.get_data_app_env(
+        alias=project, app_id=app_id, key=key, branch_id=branch_id
+    )
+
+
+@router.patch("/{project}/{app_id}/env", summary="Set data app plain env vars")
+def env_merge(
+    project: str,
+    app_id: str,
+    body: EnvMerge,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Set or update the given plain env vars; the others stay. Mirrors `kbagent data-app env-set`."""
+    return registry.data_app.set_data_app_env(
+        alias=project,
+        app_id=app_id,
+        env=body.env,
+        branch_id=body.branch_id,
+        dry_run=body.dry_run,
+    )
+
+
+@router.post("/{project}/{app_id}/env/remove", summary="Remove data app plain env vars")
+def env_remove(
+    project: str,
+    app_id: str,
+    body: EnvRemove,
+    registry: ServiceRegistry = Depends(get_registry),
+) -> dict[str, Any]:
+    """Remove one or more plain env vars. Mirrors `kbagent data-app env-remove`."""
+    return registry.data_app.remove_data_app_env(
         alias=project,
         app_id=app_id,
         keys=body.keys,

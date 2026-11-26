@@ -29,6 +29,7 @@ from ..constants import DEFAULT_JOB_RUN_TIMEOUT
 from ..data_science_client import DataScienceClient
 from ..errors import ConfigError, ErrorCode, KeboolaApiError
 from ..models import ProjectConfig
+from . import _data_app_env
 
 # Re-exported so existing `from ...data_app_service import _x` call sites
 # (tests included) keep resolving after the split into _data_app_bodies.py.
@@ -48,6 +49,7 @@ from ._data_app_bodies import (
     git_backfill_warning,
     resolve_effective_version,
 )
+from ._data_app_env import KIND_SECRET, find_collisions, key_kind, refuse_collisions, secret_key_for
 from ._data_app_git_source import (
     MAX_GIT_BRANCH_LENGTH,
     GitSource,
@@ -139,8 +141,8 @@ SECRET_KEY_PATTERN = re.compile(r"^#[A-Za-z][A-Za-z0-9_-]{0,63}$")
 # Same shape as SECRET_KEY_PATTERN but the leading ``#`` is optional. The
 # ``parameters.dataApp.secrets`` block legitimately holds BOTH ``#``-prefixed
 # encrypted secrets and plain (unencrypted) env-var config values; read/remove
-# operations must accept either, since ``secrets-list`` enumerates both. Only
-# the write path (``secrets-set``) keeps requiring ``#`` -- it encrypts.
+# operations must accept either, since ``secrets-list`` enumerates both. The
+# write path (``secrets-set``) adds a missing ``#`` first -- it encrypts.
 SECRET_OR_PLAIN_KEY_PATTERN = re.compile(r"^#?[A-Za-z][A-Za-z0-9_-]{0,63}$")
 
 
@@ -918,7 +920,11 @@ class DataAppService(BaseService):
         allow_plaintext_on_encrypt_failure: bool = False,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        """Encrypt and write ``#``-prefixed secrets to the linked Storage config.
+        """Encrypt and write secrets to the linked Storage config.
+
+        A key without ``#`` gets it, so every secret is stored encrypted under
+        ``#KEY``. A key whose runtime env var name a plain env var already has
+        is refused (``INVALID_ARGUMENT``), see ``_data_app_env``.
 
         Read-modify-write at the service layer. The Storage API's
         ``configuration`` field is a full-document overwrite; relying on
@@ -934,7 +940,7 @@ class DataAppService(BaseService):
         """
         if not secrets:
             raise KeboolaApiError(
-                message="At least one --secret '#KEY=VALUE' is required.",
+                message="At least one --secret 'KEY=VALUE' is required.",
                 status_code=0,
                 error_code=ErrorCode.DATA_APP_INVALID_SECRET,
                 retryable=False,
@@ -943,7 +949,8 @@ class DataAppService(BaseService):
         # Validate every key + value at the service boundary; we don't
         # trust the command layer to have caught everything.
         validated: dict[str, str] = {}
-        for key, value in secrets.items():
+        for raw_key, value in secrets.items():
+            key = secret_key_for(raw_key) if isinstance(raw_key, str) else raw_key
             self._validate_secret_key(key)
             if not isinstance(value, str):
                 raise KeboolaApiError(
@@ -990,6 +997,12 @@ class DataAppService(BaseService):
                 branch_id=branch_id,
             )
             existing_secrets = self._read_secrets_block(current_body)
+            refuse_collisions(
+                find_collisions(existing_secrets, list(validated)),
+                alias=alias,
+                app_id=str(app_id),
+                writing=KIND_SECRET,
+            )
 
             unchanged = sorted(
                 _derive_runtime_env_var_name(k) for k in existing_secrets if k not in validated
@@ -1145,6 +1158,7 @@ class DataAppService(BaseService):
                 env_var = _derive_runtime_env_var_name(key)
                 entry: dict[str, Any] = {
                     "key": key,
+                    "kind": key_kind(key),
                     "env_var": env_var,
                     "shadowed_by_runtime": env_var in RESERVED_RUNTIME_ENV_VARS,
                 }
@@ -1303,6 +1317,7 @@ class DataAppService(BaseService):
                     "config_id": config_id,
                     "removed": [],
                     "not_found": not_found,
+                    "status": "unchanged",
                     "config_version_before": current_version,
                     "config_version_after": current_version,
                     "deploy_required": False,
@@ -1350,6 +1365,7 @@ class DataAppService(BaseService):
                 "config_id": config_id,
                 "removed": removed,
                 "not_found": not_found,
+                "status": "removed",
                 "config_version_before": current_version,
                 "config_version_after": new_version,
                 "deploy_required": True,
@@ -1364,6 +1380,55 @@ class DataAppService(BaseService):
         finally:
             ds_client.close()
             storage_client.close()
+
+    # Plain env vars (keys without '#'); the logic is in _data_app_env.py.
+
+    def set_data_app_env(
+        self,
+        *,
+        alias: str,
+        app_id: str,
+        env: dict[str, str],
+        branch_id: int | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Write plain env vars. See :func:`_data_app_env.set_env`."""
+        return _data_app_env.set_env(
+            self, alias=alias, app_id=app_id, env=env, branch_id=branch_id, dry_run=dry_run
+        )
+
+    def list_data_app_env(
+        self,
+        *,
+        alias: str,
+        app_id: str,
+        branch_id: int | None = None,
+        limit: int = _data_app_env.DEFAULT_ENV_LIST_LIMIT,
+    ) -> dict[str, Any]:
+        """List plain env vars. See :func:`_data_app_env.list_env`."""
+        return _data_app_env.list_env(
+            self, alias=alias, app_id=app_id, branch_id=branch_id, limit=limit
+        )
+
+    def get_data_app_env(
+        self, *, alias: str, app_id: str, key: str, branch_id: int | None = None
+    ) -> dict[str, Any]:
+        """Read one plain env var. See :func:`_data_app_env.get_env`."""
+        return _data_app_env.get_env(self, alias=alias, app_id=app_id, key=key, branch_id=branch_id)
+
+    def remove_data_app_env(
+        self,
+        *,
+        alias: str,
+        app_id: str,
+        keys: list[str],
+        branch_id: int | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Remove plain env vars. See :func:`_data_app_env.remove_env`."""
+        return _data_app_env.remove_env(
+            self, alias=alias, app_id=app_id, keys=keys, branch_id=branch_id, dry_run=dry_run
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -1387,8 +1452,9 @@ class DataAppService(BaseService):
         if not isinstance(key, str) or not pattern.match(key):
             message = (
                 (
-                    f"Invalid secret key '{key}'. Keys must start with '#' and "
-                    "the rest must match [A-Za-z][A-Za-z0-9_-]{0,63} so the "
+                    f"Invalid secret key '{key}'. Keys must start with '#' "
+                    "(secrets-set adds it when missing) and the rest must match "
+                    "[A-Za-z][A-Za-z0-9_-]{0,63} so the "
                     "derived runtime env-var name (uppercase, '-' to '_') is a "
                     "valid identifier."
                 )

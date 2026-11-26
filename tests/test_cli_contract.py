@@ -657,6 +657,7 @@ CONFIRMING_COMMANDS: dict[str, str] = {
         "--permissions readOnly"
     ),
     "data-app secrets-remove": "data-app secrets-remove --project p --app-id 1 --key K",
+    "data-app env-remove": "data-app env-remove --project p --app-id 1 --key K",
     "feature project-add": "feature project-add --project p --feature f",
     "feature project-remove": "feature project-remove --project p --feature f",
     "feature user-add": "feature user-add --project p --email a@example.com --feature f",

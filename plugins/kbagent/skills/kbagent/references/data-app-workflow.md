@@ -435,10 +435,18 @@ workaround.
 ```bash
 # Set two secrets at once. Plaintext values; the CLI encrypts under
 # THIS project's KMS via the Encryption API before writing to Storage.
+# The '#' is optional (since vNEXT): 'KEY=...' is stored as '#KEY'.
 kbagent --json data-app secrets-set \
   --project prod --app-id 12345678 \
-  --secret '#ANTHROPIC_API_KEY=sk-ant-...' \
+  --secret 'ANTHROPIC_API_KEY=sk-ant-...' \
   --secret '#my-database-url=postgres://...'
+
+# Values that are not secret go in clear with env-set (since vNEXT):
+kbagent --json data-app env-set --project prod --app-id 12345678 \
+  --var ADMIN_EMAILS=a@x.io,b@x.io --var LOG_LEVEL=info
+kbagent data-app env-list --project prod --app-id 12345678
+kbagent data-app env-get --project prod --app-id 12345678 --key LOG_LEVEL
+kbagent data-app env-remove --project prod --app-id 12345678 --key LOG_LEVEL --yes
 
 # Then redeploy so the running container picks up the new env. The
 # JSON envelope from secrets-set carries a `next_step` field with the
@@ -453,7 +461,9 @@ kbagent data-app secrets-list --project prod --app-id 12345678
 # -> ADMIN_EMAILS       -> env ADMIN_EMAILS   (plain, unencrypted)
 
 # Read one key. Leading '#' is OPTIONAL. Encrypted secret
-# -> metadata only (NEVER decrypts). Plain value -> the literal value:
+# -> metadata only (NEVER decrypts). Plain value -> the literal value.
+# A plain key on secrets-list/-get/-remove adds a DEPRECATED warning
+# (since vNEXT, remove_after 2026-12-23): use env-list/-get/-remove.
 kbagent data-app secrets-get --project prod --app-id 12345678 --key '#ANTHROPIC_API_KEY'  # metadata only
 kbagent data-app secrets-get --project prod --app-id 12345678 --key ADMIN_EMAILS          # shows value
 
@@ -475,6 +485,13 @@ written. Setting a key whose derived env-var name collides with the
 runtime-injected set (`KBC_TOKEN`, `KBC_URL` for sure; more TODO
 follow-up) emits a stderr WARN -- the platform value silently shadows
 yours at runtime.
+
+One runtime env var name has one kind. `#API_KEY` (secret) and `API_KEY`
+(plain) become the same env var `API_KEY`, so a write that mixes them is
+refused with `INVALID_ARGUMENT` (exit 2, since vNEXT): `env-set API_KEY`
+when `#API_KEY` exists names `secrets-remove`, and `secrets-set API_KEY`
+when plain `API_KEY` exists names `env-remove`. Remove the old key, then
+write the new one.
 
 ## Gotchas encoded in the CLI (so you don't have to think about them)
 
@@ -524,10 +541,11 @@ yours at runtime.
 | Wake an auto-suspended app | `data-app start --app-id N` |
 | Pause a running app (wakes on the next request; since 1.0.0) | `data-app stop --app-id N` |
 | Give the user the simpleAuth password | `data-app password --app-id N` in the user's terminal (press `c`; `deploy --wait` does the same when a deploy is needed anyway), or `--copy` (since 0.96.1; never printed without `--reveal`) |
-| Set or rotate app-runtime secrets | `data-app secrets-set --app-id N --secret '#KEY=VAL'` then `data-app deploy --wait` |
-| Inspect what's set (secrets + plain env vars) | `data-app secrets-list --app-id N` (metadata only, never decrypts) |
-| Read one key | `data-app secrets-get --app-id N --key KEY` (`#` optional; encrypted → metadata only, plain → value) |
-| Remove a key | `data-app secrets-remove --app-id N --key KEY --yes` (`#` optional; idempotent) |
+| Set or rotate app-runtime secrets | `data-app secrets-set --app-id N --secret 'KEY=VAL'` (`#` optional, always encrypted) then `data-app deploy --wait` |
+| Set a value that is not secret (stored in clear) | `data-app env-set --app-id N --var KEY=VAL` (since vNEXT) then `data-app deploy --wait` |
+| Inspect what's set | `data-app secrets-list --app-id N` (metadata only, never decrypts) and `data-app env-list --app-id N` (plain values) |
+| Read one key | `data-app secrets-get --app-id N --key '#KEY'` (metadata only) or `data-app env-get --app-id N --key KEY` (value) |
+| Remove a key | `data-app secrets-remove --app-id N --key '#KEY' --yes` or `data-app env-remove --app-id N --key KEY --yes` (idempotent) |
 | Pre-flight a repo before create | `data-app validate-repo --git-repo URL` (GitHub-only, python-js for now) |
 | Triage a stuck deploy or runtime crash | `data-app logs --app-id N [--lines N \| --since ISO8601]` (since 0.43.8; plain-text container log tail, default `--lines 500`, `--lines 0` for full buffer) |
 | Tear it all down | `data-app delete --app-id N` (Storage config goes to the trash) |

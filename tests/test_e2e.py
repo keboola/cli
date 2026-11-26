@@ -10609,6 +10609,99 @@ class TestE2EDataAppLifecycle:
         )
 
     @skip_without_data_app_public
+    def test_data_app_env_vars_round_trip(self) -> None:
+        """env-set -> env-list -> env-get -> env-remove, '#'-less secrets-set, collisions (#738).
+
+        1. secrets-set without '#' stores the value encrypted under '#KEY'.
+        2. env-set writes a plain value; env-list and env-get read it back.
+        3. env-set on the env var name of a secret, and secrets-set on the name of a
+           plain env var, are refused with INVALID_ARGUMENT (exit 2).
+        4. env-remove removes the plain key; a second call is unchanged.
+        """
+        repo = os.environ[ENV_DATA_APP_GIT_REPO_PUBLIC]
+        slug = f"e2e-env-{RUN_ID}"[:60]
+        base = ["--project", self.alias]
+
+        _step(1, "Create shell app for the env-var round-trip")
+        create = _json_ok(
+            _invoke(
+                self.config_dir,
+                [
+                    "--json",
+                    "data-app",
+                    "create",
+                    *base,
+                    "--name",
+                    f"E2E Env {RUN_ID}",
+                    "--slug",
+                    slug,
+                    "--git-repo",
+                    repo,
+                    "--git-public",
+                    "--auth",
+                    "public",
+                    "--no-deploy",
+                ],
+            )
+        )["data"]
+        app_id = create["app_id"]
+        self._created_app_ids.append(app_id)
+        app = [*base, "--app-id", app_id]
+
+        _step(2, "secrets-set without '#': stored encrypted under '#E2E_SECRET'")
+        _json_ok(
+            _invoke(
+                self.config_dir,
+                ["--json", "data-app", "secrets-set", *app, "--secret", "E2E_SECRET=s3cr3t"],
+            )
+        )
+        listed = _json_ok(_invoke(self.config_dir, ["--json", "data-app", "secrets-list", *app]))
+        assert "#E2E_SECRET" in [s["key"] for s in listed["data"]["secrets"]]
+
+        _step(3, "env-set / env-list / env-get: plain value in clear")
+        set_env = _json_ok(
+            _invoke(
+                self.config_dir,
+                ["--json", "data-app", "env-set", *app, "--var", "E2E_PLAIN=v1"],
+            )
+        )
+        assert set_env["data"]["status"] == "updated"
+        env_list = _json_ok(_invoke(self.config_dir, ["--json", "data-app", "env-list", *app]))
+        assert [e["key"] for e in env_list["data"]["env"]] == ["E2E_PLAIN"]
+        env_get = _json_ok(
+            _invoke(
+                self.config_dir,
+                ["--json", "data-app", "env-get", *app, "--key", "E2E_PLAIN"],
+            )
+        )
+        assert env_get["data"]["value"] == "v1"
+
+        _step(4, "collisions are refused in both directions")
+        for args in (
+            ["env-set", *app, "--var", "E2E_SECRET=x"],
+            ["secrets-set", *app, "--secret", "E2E_PLAIN=x"],
+        ):
+            refused = _invoke(self.config_dir, ["--json", "data-app", *args])
+            assert refused.exit_code == 2, refused.output
+            assert json.loads(refused.output)["error"]["code"] == "INVALID_ARGUMENT"
+
+        _step(5, "env-remove: removes, then unchanged")
+        removed = _json_ok(
+            _invoke(
+                self.config_dir,
+                ["--json", "data-app", "env-remove", *app, "--key", "E2E_PLAIN", "--yes"],
+            )
+        )
+        assert removed["data"]["status"] == "removed"
+        again = _json_ok(
+            _invoke(
+                self.config_dir,
+                ["--json", "data-app", "env-remove", *app, "--key", "E2E_PLAIN", "--yes"],
+            )
+        )
+        assert again["data"]["status"] == "unchanged"
+
+    @skip_without_data_app_public
     def test_data_app_logs_validation_and_not_running(self) -> None:
         """E2E coverage for ``data-app logs`` (since v0.43.8).
 

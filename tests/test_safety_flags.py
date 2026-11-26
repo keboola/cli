@@ -560,6 +560,11 @@ def test_every_cli_form_in_the_registry_names_a_live_command() -> None:
         command: Any = root
         for name in path:
             command = command.commands[name]
+        if entry.behavior:
+            # A deprecated behavior of a live command: the command stays, the key
+            # names the behavior, and the command adds the warning itself.
+            assert not entry.removed_in and entry.remove_after, form
+            continue
         if last.isupper():
             # A removed positional argument: the command has no argument of that name.
             arguments = [
