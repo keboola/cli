@@ -25,7 +25,6 @@ from ..constants import (
     DEFAULT_SAMPLE_LIMIT,
     FOLDER_METADATA_KEY,
     KEBOOLA_DIR_NAME,
-    MANIFEST_VERSION,
 )
 from ..errors import ConfigError, KeboolaApiError, SyncConflictError
 from ..sync.branch_registry import (
@@ -61,15 +60,12 @@ from ..sync.config_format import (
     local_row_to_api,
 )
 from ..sync.diff_engine import compute_changeset, compute_row_changeset, config_hash
-from ..sync.dir_lock import CREATE, REFUSE, UNLOCKED, locks_tree
+from ..sync.dir_lock import CREATE, EXISTING, REFUSE, UNLOCKED, locks_tree
 from ..sync.git_utils import get_default_branch, is_git_repo
 from ..sync.manifest import (
     Manifest,
-    ManifestBranch,
     ManifestConfiguration,
     ManifestGitBranching,
-    ManifestNaming,
-    ManifestProject,
     load_manifest,
     save_manifest,
 )
@@ -135,8 +131,10 @@ from ._sync_moves import move_fields, persist_moves, relocate, settle_moves, sta
 from ._sync_pending_removals import RemovalJournal, recover_pending_removals, relocate_records
 from ._sync_project_guard import (
     adopt_existing_manifest,
+    build_initial_manifest,
     init_missing_tree,
     load_project_manifest,
+    validate_project_manifest,
 )
 from ._sync_promote_remap import (
     PromoteRemap,
@@ -187,7 +185,7 @@ from ._sync_untracked import (
     raise_on_component_change,
 )
 from ._sync_writeback import reconcile_promote_links
-from .base import BaseService, ClientFactory, find_default_branch_id
+from .base import BaseService, ClientFactory
 from .data_app_service import (
     DataScienceClientFactory,
     make_default_ds_client_factory,
@@ -399,50 +397,17 @@ class SyncService(BaseService):
                 "kbc-written manifest, or delete .keboola/ to reinitialize."
             )
 
-        # Fetch project info from API
-        client = self._client_factory(project.stack_url, project.token)
-        with client:
-            token_info = client.verify_token()
-            branches = client.list_dev_branches()
-
-        project_id = token_info.project_id
-        if project_id is None:
-            raise ConfigError("Token verification returned no project ID; cannot build manifest.")
-        api_host = project.stack_url.replace("https://", "").rstrip("/")
-        default_branch_id = find_default_branch_id(branches)
-        default_branch_name = "main"
-
-        # Git branching setup
-        git_branching_config = ManifestGitBranching(enabled=False)
+        manifest = build_initial_manifest(self, project, sync_workspaces=sync_workspaces)
+        default_branch_name = manifest.git_branching.default_branch
         if git_branching:
             if not is_git_repo(project_root):
                 raise ConfigError("Git repository not found. Initialize git first: git init")
             default_branch_name = get_default_branch(project_root)
-            git_branching_config = ManifestGitBranching(
-                enabled=True,
-                defaultBranch=default_branch_name,
+            manifest.git_branching = ManifestGitBranching(
+                enabled=True, defaultBranch=default_branch_name
             )
-
-        # Build manifest
-        manifest = Manifest(
-            version=MANIFEST_VERSION,
-            project=ManifestProject(id=project_id, apiHost=api_host),
-            allowTargetEnv=True,
-            gitBranching=git_branching_config,
-            naming=ManifestNaming(),
-            syncWorkspaces=sync_workspaces,
-            branches=[
-                ManifestBranch(
-                    id=default_branch_id,
-                    path=default_branch_name,
-                )
-            ]
-            if default_branch_id is not None
-            else [],
-            configurations=[],
-        )
-
-        # Save manifest
+            if manifest.branches:
+                manifest.branches[0].path = default_branch_name
         save_manifest(project_root, manifest)
 
         created_files = [str(manifest_path)]
@@ -467,9 +432,9 @@ class SyncService(BaseService):
 
         return {
             "status": "initialized",
-            "project_id": project_id,
+            "project_id": manifest.project.id,
             "project_alias": alias,
-            "api_host": api_host,
+            "api_host": manifest.project.api_host,
             "git_branching": git_branching,
             "default_branch": default_branch_name,
             "sync_workspaces": sync_workspaces,
@@ -480,7 +445,7 @@ class SyncService(BaseService):
     # pull
     # ------------------------------------------------------------------
 
-    @locks_tree(outside=CREATE)
+    @locks_tree(outside=CREATE, dry_run_outside=EXISTING)
     def pull(
         self,
         alias: str,
@@ -517,27 +482,38 @@ class SyncService(BaseService):
             max_samples: Max number of tables to sample (default 50).
             branch_override: If set, pull from this branch ID rather than
                 the resolved active/manifest branch (CLI ``--branch``).
-            init_if_missing: Initialize a directory with no manifest first,
-                under the same directory lock as the pull (L5); a failed
-                init raises :class:`SyncInitError`.
+            init_if_missing: Initialize a missing manifest under the pull's
+                lock, or build it in memory for a dry run. A failed init
+                raises :class:`SyncInitError`.
 
         Returns:
             Dict with pull statistics (configs, rows, files written).
         """
-        if init_if_missing:
-            init_missing_tree(self, alias, project_root)
+        preview_manifest = (
+            init_missing_tree(self, alias, project_root, dry_run=dry_run)
+            if init_if_missing
+            else None
+        )
         projects = self.resolve_projects([alias])
         project = projects[alias]
 
-        # Load or verify manifest exists
-        manifest = load_project_manifest(self, alias, project, project_root)
+        if preview_manifest is not None:
+            manifest = validate_project_manifest(
+                self, alias, project, project_root, preview_manifest
+            )
+        else:
+            manifest = load_project_manifest(self, alias, project, project_root)
         # Finish the directory removals an interrupted pull left, before any
         # path is allocated (#827, D11).
         recovered = recover_pending_removals(project_root, manifest, dry_run=dry_run)
 
         # Determine branch to pull from (git-branching aware)
         branch_id = self._resolve_branch_id(
-            alias, manifest, project_root, branch_override=branch_override
+            alias,
+            manifest,
+            project_root,
+            branch_override=branch_override,
+            in_memory_manifest=preview_manifest is not None,
         )
 
         # Fetch all components with configs from API (+ storage metadata + jobs)
@@ -2012,6 +1988,8 @@ class SyncService(BaseService):
         manifest: "Manifest",
         project_root: Path,
         branch_override: int | None = None,
+        *,
+        in_memory_manifest: bool = False,
     ) -> int | None:
         """Resolve the Keboola branch ID for sync operations.
 
@@ -2070,6 +2048,11 @@ class SyncService(BaseService):
 
         # Non git-branching: use active_branch_id or manifest fallback
         fallback = manifest.branches[0].id if manifest.branches else None
+        if in_memory_manifest:
+            active = resolve_branch(self._config_store, alias, None, required=True)
+            if active is not None:
+                return active
+            return record_branch(self._config_store, alias, fallback, "production")
         return resolve_branch(self._config_store, alias, None, manifest_branch_id=fallback)
 
     # ------------------------------------------------------------------
