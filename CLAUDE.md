@@ -820,6 +820,8 @@ kbagent storage swap-tables [--project NAME] --table-id ID --target-table-id ID 
     #   names `storage job-detail --job-id ID --wait` (create-table also names
     #   `storage table-detail`). Never re-run: a repeated swap swaps the tables back,
     #   a repeated --source-table-id create starts a second copy.
+kbagent storage clustering-set [--project NAME] --table-id ID (--clustering-field COL [--clustering-field COL ...] | --clear) [--branch ID] [--dry-run] [--timeout SECONDS]
+# clustering-set: in-place BigQuery clustering change (PUT .../definition, no copy, no swap); version gate in gotchas.md.
 kbagent storage clone-table [--project NAME] --table-id ID --branch ID [--dry-run]
 # --branch 0 / --source-branch-id 0 (CLI-21): swap-tables --branch 0 swaps on the default branch ID it
 #   reads first (was: exit 5 "requires a branch"); clone-table --branch 0 is INVALID_ARGUMENT, exit 2, no

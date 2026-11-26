@@ -2151,6 +2151,21 @@ remain branch-aware because modifying a dev branch is the expected intent.
     (the quoted, directly queryable table path; null when Storage reports no location) (since
     0.95.0, #761). A linked bucket's path is the SOURCE project's database + schema.
 
+  storage clustering-set
+    Change the clustering of a typed BigQuery table IN PLACE (no copy, no swap): --clustering-field
+    COL (repeatable, 1 to 4, order matters) replaces it, --clear removes it. Waits for the job,
+    then reads `table-detail`; the result has `status` updated | unchanged (unchanged = the table
+    already has that clustering, nothing written), `table_id`, `branch_id` (the branch used; the
+    default branch ID for production, also for --branch 0), `clustering_before`, `clustering`,
+    `job_id`, and `warnings` (in the data, not the envelope) only when present. The Storage job
+    result is not passed through. --dry-run returns `dry_run`, `table_id`, `branch_id`,
+    `clustering_before`, `clustering`, `would_change` (no `status`, no `job_id`).
+    Storage's 422 `storage.tables.clusteringUpdateNotAllowed` (not BigQuery, alias, external
+    bucket, unknown column, more than 4 fields) is INVALID_ARGUMENT, exit 2, with
+    `details.api_error_code`. BigQuery clusters data written after the change; existing rows keep
+    their order until rewritten. For an immediate full reclustering use the
+    `create-table --source-table-id` + `swap-tables` path.
+
   storage create-bucket
     Create a new storage bucket. Stage must be "in" or "out". Branch-aware.
     On projects WITHOUT the `storage-branches` feature (legacy fake-branch), --branch

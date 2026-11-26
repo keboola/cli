@@ -297,6 +297,7 @@ SERVE_COMMAND_MAP: dict[tuple[str, str], str] = {
     ("POST", "/storage/tables/{project}/{table_id}/pull"): "storage clone-table",
     ("POST", "/storage/tables/{project}/{table_id}/snapshots"): "storage snapshot-create",
     ("POST", "/storage/tables/{project}/{table_id}/swap"): "storage swap-tables",
+    ("PUT", "/storage/tables/{project}/{table_id}/clustering"): "storage clustering-set",
     ("POST", "/stream/{project}/create-source"): "stream create-source",
     ("POST", "/stream/{project}/delete"): "stream delete",
     ("POST", "/token/{project}/create"): "token create",

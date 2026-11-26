@@ -294,6 +294,7 @@ OPERATION_REGISTRY: dict[str, str] = {
     # Storage descriptions
     "storage.describe-bucket": "write",
     "storage.describe-table": "write",
+    "storage.clustering-set": "write",
     "storage.describe-column": "write",
     "storage.describe-batch": "write",
     "storage.describe-migrate": "write",

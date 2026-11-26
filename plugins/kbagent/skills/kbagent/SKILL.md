@@ -193,6 +193,7 @@ When working inside a git repository or project directory, run `kbagent init` (o
 | Set descriptions on one or more columns of a storage table | `kbagent storage describe-column --project PROJECT --table-id TABLE-ID --column COLUMN` |
 | Apply descriptions to buckets, tables, and columns from a YAML file | `kbagent storage describe-batch --project PROJECT --file FILE` |
 | Convert legacy KBC.column.* descriptions to the native definition endpoint | `kbagent storage describe-migrate --project PROJECT` |
+| Set or remove the clustering of a BigQuery table in place (waits for the job) | `kbagent storage clustering-set --project PROJECT --table-id TABLE-ID` |
 | Show a Storage job -- status, table, rows imported, timing, error | `kbagent storage job-detail --project PROJECT --job-id JOB-ID` |
 | Delete one or more storage buckets | `kbagent storage delete-bucket --project PROJECT --bucket-id BUCKET-ID` |
 | Delete one or more Storage Files | `kbagent storage file-delete --project PROJECT --file-id FILE-ID` |

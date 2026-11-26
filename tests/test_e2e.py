@@ -504,6 +504,13 @@ class TestFullE2E:
         )
         self._test_create_table_from_source(bucket_id, table_id)
 
+        _step(
+            "15.2",
+            "storage clustering-set",
+            "in-place BigQuery clustering change (backend-aware, DMD-3042)",
+        )
+        self._test_clustering_set(bucket_id, table_id)
+
         # ==============================================================
         # PHASE 4: Config operations (create via API, test via CLI)
         # ==============================================================
@@ -999,6 +1006,68 @@ class TestFullE2E:
             "The clustering layout applied by create-table is not readable on the "
             f"production name after the swap: {definition.get('clustering')!r}"
         )
+
+    def _test_clustering_set(self, bucket_id: str, table_id: str) -> None:
+        """storage clustering-set: set, repeat (unchanged), clear. BigQuery-only.
+
+        On any other backend Storage refuses the change with a 422, which
+        kbagent reports as INVALID_ARGUMENT (exit 2) keeping the Storage code.
+        """
+        detail = self._run_ok(
+            "storage", "bucket-detail", "--project", self.alias, "--bucket-id", bucket_id
+        )["data"]
+        backend = (detail.get("backend") or detail.get("sql_dialect") or "").lower()
+        set_args = (
+            "storage",
+            "clustering-set",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--clustering-field",
+            "id",
+            "--clustering-field",
+            "value",
+        )
+
+        if backend != "bigquery":
+            result = self._run(*set_args)
+            assert result.exit_code == 2, (
+                f"Expected exit 2 from the Storage refusal, got {result.exit_code}:\n{result.output}"
+            )
+            error = json.loads(result.output)["error"]
+            assert error["details"]["api_error_code"] == "storage.tables.clusteringUpdateNotAllowed"
+            return
+
+        def clustering() -> Any:
+            table = self._run_ok(
+                "storage", "table-detail", "--project", self.alias, "--table-id", table_id
+            )["data"]
+            return (table.get("definition") or {}).get("clustering")
+
+        updated = self._run_ok(*set_args)["data"]
+        assert updated["status"] == "updated"
+        assert updated["job_id"] is not None
+        assert "result" not in updated
+        assert isinstance(updated["branch_id"], int)
+        assert (clustering() or {}).get("fields") == ["id", "value"]
+
+        repeated = self._run_ok(*set_args)["data"]
+        assert repeated["status"] == "unchanged"
+        assert repeated["job_id"] is None
+
+        cleared = self._run_ok(
+            "storage",
+            "clustering-set",
+            "--project",
+            self.alias,
+            "--table-id",
+            table_id,
+            "--clear",
+        )["data"]
+        assert cleared["status"] == "updated"
+        assert cleared["clustering"] is None
+        assert clustering() is None
 
     def _test_upload_table(self, table_id: str) -> None:
         """Upload CSV data to the table."""

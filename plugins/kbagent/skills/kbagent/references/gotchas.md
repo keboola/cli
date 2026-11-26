@@ -4233,6 +4233,38 @@ type inventory and examples.
   `include=` on the list route accepts no `definition` value, so reading the
   layout costs one `table-detail` request per table.
 
+## `storage clustering-set` changes the clustering in place (BigQuery)
+
+*(since vNEXT)*
+
+- **In place, not a copy.** `storage clustering-set` sends the new clustering to the
+  table-definition endpoint; the table keeps its ID and data. The copy path
+  (`create-table --source-table-id` + `swap-tables`) moves all data twice.
+- **Existing rows keep their order.** BigQuery clusters data written after the change;
+  rows already in the table stay as they are until rewritten (for example by a full
+  load). For an immediate full reclustering use the copy path.
+- **`unchanged` writes nothing.** Storage would run a job even for the same clustering,
+  so kbagent reads the table first and returns `status: unchanged` (`job_id: null`)
+  when the requested fields equal the stored ones, in the same order.
+- **422 is a usage error.** Storage refuses a non-BigQuery table, an alias, an external
+  bucket, more than 4 fields, a field twice or an unknown column with
+  `storage.tables.clusteringUpdateNotAllowed`; kbagent reports `INVALID_ARGUMENT`,
+  exit 2, with that code in `details.api_error_code`.
+- **Small result.** The result has `table_id`, `branch_id`, `clustering_before`,
+  `clustering`, `status`, `job_id` and, only when present, `warnings` (in
+  `.data.warnings`, not the envelope's top-level `warnings`). `branch_id` is the
+  branch used, the default branch ID for production and for `--branch 0` (null only
+  when the branch list could not be read). The Storage job result is not passed
+  through. `--dry-run` returns `dry_run`, `table_id`, `branch_id`,
+  `clustering_before`, `clustering`, `would_change` (no `status`, no `job_id`).
+- **`--clear` on a table without clustering support reaches Storage.** An untyped,
+  non-BigQuery or external-bucket table has no clustering either, but kbagent does
+  not answer `unchanged` for it: Storage refuses with the 422 (`INVALID_ARGUMENT`), and
+  `--dry-run` reports `would_change: true`.
+- **A timeout does not cancel the job.** `STORAGE_JOB_TIMEOUT`, exit 4,
+  `retryable: false`, `details.job_id`; the message names `storage job-detail --wait`
+  and `storage table-detail`. Following the job is safe.
+
 ## `storage create-table --source-table-id` + partition/clustering are BigQuery-only
 
 - **`--source-table-id` copies an existing table instead of building from `--column`.**
