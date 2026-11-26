@@ -305,6 +305,43 @@ def test_first_pull_is_busy_while_another_run_holds_the_fresh_directory(
     assert result["status"] != "error"
 
 
+@pytest.mark.parametrize("selection", ["--project", "--all-projects"])
+@pytest.mark.parametrize("partial_tree", [False, True])
+def test_first_pull_dry_run_previews_configs_without_writing(
+    ws: Workspace, selection: str, partial_tree: bool
+) -> None:
+    all_projects = selection == "--all-projects"
+    target = ws.root / "prod" if all_projects else ws.root
+    if partial_tree:
+        (target / ".keboola").mkdir(parents=True)
+    before = sorted(ws.root.rglob("*"))
+
+    result = _cli(
+        ws.store,
+        ws.service(),
+        [
+            "--json",
+            "sync",
+            "pull",
+            "--directory",
+            str(ws.root),
+            "--no-storage",
+            "--no-jobs",
+            "--dry-run",
+            *([selection] if all_projects else [selection, "prod"]),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    output = json.loads(result.output)
+    data = output["data"]
+    pull = data["projects"]["prod"] if all_projects else data
+    assert pull["status"] == "dry_run"
+    assert pull["configs_pulled"] == 1
+    assert output["targets"][0]["branch_source"] == "production"
+    assert sorted(ws.root.rglob("*")) == before
+
+
 @pytest.mark.parametrize("operation", ["diff", "push", "status"])
 def test_tree_operations_are_busy_and_touch_nothing(
     ws: Workspace, api: FakeStorage, operation: str

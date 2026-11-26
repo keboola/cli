@@ -15,10 +15,18 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
-from ..constants import KEBOOLA_DIR_NAME, MANIFEST_FILENAME
+from ..constants import KEBOOLA_DIR_NAME, MANIFEST_FILENAME, MANIFEST_VERSION
 from ..errors import ConfigError, KeboolaApiError, SyncInitError
 from ..sync.dir_lock import sync_dir_lock
-from ..sync.manifest import Manifest, load_manifest, save_manifest
+from ..sync.manifest import (
+    Manifest,
+    ManifestBranch,
+    ManifestNaming,
+    ManifestProject,
+    load_manifest,
+    save_manifest,
+)
+from .base import find_default_branch_id
 
 if TYPE_CHECKING:
     from ..models import ProjectConfig
@@ -74,7 +82,19 @@ def load_project_manifest(
         ConfigError: the manifest project ID or ``apiHost`` differs from the
             project, or the project ID cannot be read from the token.
     """
-    manifest = load_manifest(project_root)
+    return validate_project_manifest(
+        service, alias, project, project_root, load_manifest(project_root)
+    )
+
+
+def validate_project_manifest(
+    service: SyncService,
+    alias: str,
+    project: ProjectConfig,
+    project_root: Path,
+    manifest: Manifest,
+) -> Manifest:
+    """Refuse a disk-backed or in-memory manifest that belongs to another project."""
     tree_host = _host(manifest.project.api_host)
     project_host = _host(project.stack_url)
     project_id = project.project_id
@@ -140,18 +160,54 @@ def adopt_existing_manifest(
     }
 
 
-def init_missing_tree(service: SyncService, alias: str, project_root: Path) -> None:
-    """``sync init`` *project_root* when it has no manifest yet (pull's auto-init, L5).
+def build_initial_manifest(
+    service: SyncService,
+    project: ProjectConfig,
+    *,
+    sync_workspaces: bool = False,
+) -> Manifest:
+    """Fetch the API metadata for a new manifest without writing it."""
+    client = service._client_factory(project.stack_url, project.token)
+    with client:
+        token_info = client.verify_token()
+        branches = client.list_dev_branches()
 
-    Runs inside pull's directory lock, so two first pulls of one directory
-    never both see "no manifest". A failed init is :class:`SyncInitError`.
+    project_id = token_info.project_id
+    if project_id is None:
+        raise ConfigError("Token verification returned no project ID; cannot build manifest.")
+    api_host = project.stack_url.replace("https://", "").rstrip("/")
+    default_branch_id = find_default_branch_id(branches)
+    return Manifest(
+        version=MANIFEST_VERSION,
+        project=ManifestProject(id=project_id, apiHost=api_host),
+        allowTargetEnv=True,
+        naming=ManifestNaming(),
+        syncWorkspaces=sync_workspaces,
+        branches=[ManifestBranch(id=default_branch_id, path="main")]
+        if default_branch_id is not None
+        else [],
+        configurations=[],
+    )
+
+
+def init_missing_tree(
+    service: SyncService, alias: str, project_root: Path, *, dry_run: bool
+) -> Manifest | None:
+    """Initialize a missing manifest, returning an in-memory copy only for a preview.
+
+    A real first pull initializes under the directory lock. A failed init
+    or preview-manifest build is :class:`SyncInitError`.
     """
     if (project_root / KEBOOLA_DIR_NAME / MANIFEST_FILENAME).exists():
-        return
+        return None
     try:
+        if dry_run:
+            project = service.resolve_projects([alias])[alias]
+            return build_initial_manifest(service, project)
         service.init_sync(alias, project_root)
     except Exception as exc:
         raise SyncInitError(exc) from exc
+    return None
 
 
 @contextmanager

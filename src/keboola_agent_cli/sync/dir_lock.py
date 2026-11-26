@@ -5,7 +5,8 @@ first still runs, a ``sync pull`` during a push -- read and write the same
 manifest, ``pendingRemovals`` journal, quarantine and config files, and each
 silently undoes the other's bookkeeping. Every command that reads or writes a
 tree takes this lock first, for its whole run, and a second run fails fast
-with ``SYNC_DIRECTORY_BUSY`` (retryable: wait, then run it again).
+with ``SYNC_DIRECTORY_BUSY`` (retryable: wait, then run it again). Pull previews
+do not create a lock if one is not already present.
 
 - **The lock (L1, L2).** ``<root>/.keboola/lock/sync.lock``, an OS lock
   (``flock`` on POSIX, ``LockFileEx`` on Windows) through filelock's native
@@ -121,18 +122,20 @@ def busy_error(root: Path) -> KeboolaApiError:
     )
 
 
-def _acquire(root: Path) -> Any:
+def _acquire(root: Path, *, prepare: bool = True) -> Any:
     """Take the OS lock of *root* without waiting; busy or ``ConfigError`` otherwise."""
     lock_dir = root / KEBOOLA_DIR_NAME / LOCK_DIR
     lock_file = lock_dir / LOCK_FILENAME
     try:
-        lock_dir.mkdir(parents=True, exist_ok=True)
+        if prepare:
+            lock_dir.mkdir(parents=True, exist_ok=True)
         # A linked .keboola/ or lock/ would put the lock (and the .gitignore
         # written next to it) outside the project. The root is resolved again
         # now that it exists (a Windows short name expands only then).
         if lock_dir.resolve() != root.resolve() / KEBOOLA_DIR_NAME / LOCK_DIR:
             raise ConfigError(f"The sync lock directory {lock_dir} resolves outside {root}.")
-        ensure_self_ignore(lock_dir / IGNORE_FILENAME)
+        if prepare:
+            ensure_self_ignore(lock_dir / IGNORE_FILENAME)
         lock = _NativeFileLock(
             str(lock_file),
             timeout=0,
@@ -165,6 +168,8 @@ def _acquire(root: Path) -> Any:
 CREATE = "create"
 REFUSE = "refuse"
 UNLOCKED = "unlocked"
+# A preview may use a lock that is already there, but must not create one.
+EXISTING = "existing"
 
 
 @contextlib.contextmanager
@@ -175,7 +180,8 @@ def sync_dir_lock(
 
     The thread that already holds the tree -- or entered it UNLOCKED -- just
     nests. *outside* decides for a directory that has no ``.keboola/`` yet:
-    :data:`CREATE`, :data:`REFUSE` or :data:`UNLOCKED`. *read_only_ok* is for
+    :data:`CREATE`, :data:`REFUSE` or :data:`UNLOCKED`. :data:`EXISTING` only
+    takes a lock if its file already exists. *read_only_ok* is for
     a caller that only reads the tree (the `sync clone` source): a tree this
     user cannot write is entered without the lock instead of failing. A
     writer would need the same rights, so no kbagent run of this user can
@@ -195,9 +201,13 @@ def sync_dir_lock(
     if no_tree and outside == REFUSE:
         load_manifest(root)  # raises the "no manifest" FileNotFoundError
     lock: Any = _UNLOCKED
-    if not (no_tree and outside == UNLOCKED):
+    skip_lock = no_tree and outside == UNLOCKED
+    if outside == EXISTING:
+        lock_file = lock_file_path(root)
+        skip_lock = not (lock_file.exists() or lock_file.is_symlink())
+    if not skip_lock:
         try:
-            lock = _acquire(root)
+            lock = _acquire(root, prepare=outside != EXISTING)
         except UnwritableLockError:
             if not read_only_ok:
                 raise
@@ -210,7 +220,9 @@ def sync_dir_lock(
             lock.release()
 
 
-def locks_tree[F: Callable[..., Any]](*, outside: str) -> Callable[[F], F]:
+def locks_tree[F: Callable[..., Any]](
+    *, outside: str, dry_run_outside: str | None = None
+) -> Callable[[F], F]:
     """Run a method under the lock of its ``project_root`` argument (L5)."""
 
     def decorate(method: F) -> F:
@@ -218,8 +230,9 @@ def locks_tree[F: Callable[..., Any]](*, outside: str) -> Callable[[F], F]:
 
         @functools.wraps(method)
         def locked(*args: Any, **kwargs: Any) -> Any:
-            root = signature.bind(*args, **kwargs).arguments["project_root"]
-            with sync_dir_lock(root, outside=outside):
+            arguments = signature.bind(*args, **kwargs).arguments
+            mode = dry_run_outside if dry_run_outside and arguments.get("dry_run") else outside
+            with sync_dir_lock(arguments["project_root"], outside=mode):
                 return method(*args, **kwargs)
 
         return cast(F, locked)
