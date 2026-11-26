@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 # A `job run` of this component reads the flow and checks it first. Not imported
 # from flow_service, which imports this module.
 FLOW_COMPONENT_ID = "keboola.flow"
+DATA_APPS_COMPONENT_ID = "keboola.data-apps"
 
 # Terminal statuses for which we surface a log-tail.
 _LOG_TAIL_STATUSES: frozenset[str] = frozenset({"error", "warning", "terminated"})
@@ -649,6 +650,17 @@ class JobService(BaseService):
             completed job, optionally with ``logTail`` attached; otherwise
             returns the initial job response.
         """
+        if component_id == DATA_APPS_COMPONENT_ID:
+            raise KeboolaApiError(
+                message=(
+                    f"{DATA_APPS_COMPONENT_ID} is not run as a job. Start an app with "
+                    "`kbagent data-app start` or `kbagent data-app deploy`. To start or "
+                    "restart it from a flow, add a keboola.data-app-control task "
+                    "(configData.parameters.appId) to the flow."
+                ),
+                status_code=0,
+                error_code=ErrorCode.INVALID_ARGUMENT,
+            )
         branch_id = resolve_branch(self._config_store, alias, branch_id)
         if poll_strategy not in VALID_POLL_STRATEGIES:
             raise KeboolaApiError(

@@ -57,6 +57,12 @@ These lists keep `error`, because their entries are not failed items with an err
 - **Removed short flags** (a usage error, exit 2): `-c` (`permissions list --category`, `lineage show --column`), `-r` (`search` and `config search --regex`, `project invite` and `project member-set-role --role`), `-d` on `http post/patch --body`, `permissions set --deny` and `token create --description`, `-f` on `lineage show --format`, `-l` on `search --limit` and `-n` on `changelog` and `kai history --limit` (use `-L`), `-m` on `permissions set --mode`, and `-v` on `changelog --full` (`-v` is the global `--verbose`).
 - **In documents and agent commands, use the long names.** They work on 0.x and 1.x.
 
+## `job run` refuses `keboola.data-apps`
+
+*(since 1.4.2)*
+
+- `job run --component-id keboola.data-apps` fails with `INVALID_ARGUMENT` before any job is created. An app is started with `data-app start` / `data-app deploy` (Data Science API, not jobs). To start or restart it from a flow, add a `keboola.data-app-control` task (`configData.parameters.appId`, optional `forceRestart`). `config detail` / `config update` on `keboola.data-apps` still work. The SDK `Client.run_job` does not check this.
+
 ## Flow checks agree with the job queue: `job run` on a flow, `flow validate`, exact task ids
 
 *(since 1.4.1)*
