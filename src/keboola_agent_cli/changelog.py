@@ -28,11 +28,6 @@ from .constants import CHANGELOG_HEADLINE_MAX_CHARS
 
 # Ordered newest-first.  Each value is a list of brief one-line descriptions.
 CHANGELOG: dict[str, list[str]] = {
-    "1.4.2": [
-        "`job run --component-id keboola.data-apps` is refused with `INVALID_ARGUMENT` before any "
-        "job is created. Start an app with `data-app start` / `data-app deploy`, or from a flow with "
-        "a `keboola.data-app-control` task.",
-    ],
     "1.4.1": [
         "Fix (#1026, #725): `config update --merge` with an empty body no longer erases the "
         "configuration. `--configuration '{}'` with `--merge` (also on `config row-update`) now "

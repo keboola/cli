@@ -354,9 +354,6 @@ def job_run(
     Creates a Queue API job and optionally waits for completion.
     Use --row-id to run specific configuration rows.
 
-    keboola.data-apps is refused: start apps with 'data-app start' or a
-    keboola.data-app-control flow task.
-
     When a dev branch is active (via 'branch use'), the job automatically
     runs on that branch. Use --branch to override.
 
