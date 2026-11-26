@@ -1271,7 +1271,7 @@ To start or restart an app from a flow, add a `keboola.data-app-control` task
   except list/create takes [--merge-request-id N] [--branch B]; omitted, the
   target is the merge request OF the active branch (`branch use`). A branch has at most
   one merge request, ever. Both flags at once -> exit 2. Status is the DERIVED state the
-  web UI shows (in_development|in_review|approved|in_merge|merged|closed|rejected).
+  web UI shows (in_development|in_review|approved|in_merge|merged|closed|rejected), or `unknown`.
 
   merge-request list
     List merge requests, newest first. --state filters client-side (unknown value -> exit 2).
@@ -1335,7 +1335,8 @@ To start or restart an app from a flow, add a `keboola.data-app-control` task
   a scoped token 403s on everything but list. Every result may carry warnings[].
   A merge repeated after an earlier merge already landed answers status "already_merged", exit 0;
   repeated while that merge still runs, it answers MR_MERGE_RUNNING (exit 4): do not merge
-  again, poll `merge-request detail`.
+  again, poll `merge-request detail`. After a merge that failed with a 5xx, a timeout or a lost
+  connection, the same read decides; with `details.outcome_unknown` check detail first.
 """,
     "notification": """\
 #### Notification Subscriptions (Flow Notifications Tab)

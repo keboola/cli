@@ -58,6 +58,7 @@ order; canonical vocabulary for all clients:
 | `approved` | `approved` | open + APPROVED |
 | `in_merge` | `in_merge` (the one state the UI badge omits — we name it) | — |
 | `merged` | `published` | merged |
+| `unknown` | any other or missing raw state (never an unknown server `derivedState`, which is ignored) | — |
 
 Reliability caveat (Opus wire review 2026-08-27, verified against Connection): the
 `rejected` / self-`closed` rows depend on `reviewers[].status`, which the backend populates

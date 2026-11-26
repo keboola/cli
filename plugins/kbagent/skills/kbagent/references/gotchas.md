@@ -7187,6 +7187,14 @@ It carries the command name, the outcome, and the duration -- never argument val
 - **Every result may carry `warnings[]`** (post-merge cleanup failure, a dropped
   `--change-description` on a delete resolution). A truncated conflict list inside
   `MR_MERGE_CONFLICT` carries `details.api_error_params_truncated: true` -- run `conflicts`.
+- **A failed merge call is read back** (since vNEXT). After a 5xx, a read/write timeout or a
+  connection lost after sending, `merge` reads the MR once and never repeats the PUT:
+  `in_merge` is `MR_MERGE_RUNNING` (exit 4), `published` is `already_merged` (exit 0, cleanup
+  runs), anything else keeps the error with `details.outcome_unknown` -- check `detail` before
+  merging again. A lost connection was `INTERNAL_ERROR` (exit 1), now `CONNECTION_ERROR` (exit 4).
+  A 409 without a code and conflicts is `MR_MERGE_CONFLICT` only if the live list has conflicts
+  or cannot be read, else `MR_NOT_READY_TO_MERGE`. `derived_state` is `unknown` for a raw
+  state kbagent does not know.
 - **`allowed_actions` are feature-blind in `list`, feature-aware in `detail`**: on a project
   where the feature was later switched off, list rows still recommend writes that fail
   `FEATURE_NOT_ENABLED` (state-derived; Layer 2 declined the per-list GET). `detail` carries
