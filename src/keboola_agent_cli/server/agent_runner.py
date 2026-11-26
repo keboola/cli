@@ -35,6 +35,7 @@ from ..constants import (
     ENV_KBAGENT_UPSTREAM_STATUS,
     ENV_KBAGENT_UPSTREAM_TASK_ID,
 )
+from ._process_stream import iter_pipe_lines
 from .agents_store import (
     REMOVED_ACTION_MESSAGE,
     REMOVED_ACTION_TYPES,
@@ -958,11 +959,8 @@ async def stream_ai_agent_events(
     stderr_chunks: list[str] = []
 
     async def _consume(stream: asyncio.StreamReader, kind: str) -> None:
-        while True:
-            raw = await stream.readline()
-            if not raw:
-                break
-            line = raw.decode("utf-8", errors="replace").rstrip("\n")
+        async for raw in iter_pipe_lines(stream):
+            line = raw.decode("utf-8", errors="replace")
             if kind == "stdout" and jsonl:
                 try:
                     parsed = json.loads(line)

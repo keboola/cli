@@ -23,6 +23,7 @@ import typer
 
 from ..errors import ConfigError, ErrorCode
 from ..output import OutputFormatter
+from ..root_command import ReportedExit
 from ..server.agents_store import (
     REMOVED_ACTION_MESSAGE,
     REMOVED_ACTION_TYPES,
@@ -431,15 +432,19 @@ def _render_stream_event(formatter: OutputFormatter, evt: dict[str, Any]) -> Non
     console.print(f"[dim]{event}:[/dim] {json.dumps(data, ensure_ascii=False)[:200]}")
 
 
-def _stream_to_stdout(formatter: OutputFormatter, agen: AsyncIterator[dict[str, Any]]) -> None:
-    """Drive an async event generator from sync code and render each event."""
+def _stream_to_stdout(formatter: OutputFormatter, agen: AsyncIterator[dict[str, Any]]) -> bool:
+    """Render all events; return whether the completed run failed."""
 
-    async def _drive() -> None:
+    async def _drive() -> bool:
+        failed = False
         async for evt in agen:
             _render_stream_event(formatter, evt)
+            if evt["event"] == "done":
+                failed = evt["data"].get("status") == "error"
+        return failed
 
     try:
-        asyncio.run(_drive())
+        return asyncio.run(_drive())
     except KeyboardInterrupt:
         # The async generator's finally block kills any spawned subprocess.
         # Print a short marker so the user knows the partial output is theirs.
@@ -678,7 +683,8 @@ def agent_run(
 
     By default blocks until the run finishes and prints the AgentRun
     record. Use ``--stream`` to render live events as they arrive (one
-    line per event in human mode, NDJSON in --json mode).
+    line per event in human mode, NDJSON in --json mode). Failed or
+    timed-out runs exit 1 in either mode.
 
     ``--runtime-prompt`` is a shortcut for ai_agent tasks (most common
     use case for manual tasks). For full control over the runtime merge,
@@ -694,13 +700,17 @@ def agent_run(
         runtime["prompt"] = runtime_prompt
     try:
         if stream:
-            _stream_to_stdout(formatter, service.stream_run(task_id, runtime_input=runtime))
+            if _stream_to_stdout(formatter, service.stream_run(task_id, runtime_input=runtime)):
+                raise ReportedExit(code=1)
             return
         run = asyncio.run(service.run_task(task_id, runtime_input=runtime))
     except ConfigError as exc:
         formatter.error(message=exc.message, error_code=ErrorCode.NOT_FOUND)
         raise typer.Exit(code=1) from None
-    formatter.output(run.model_dump(mode="json"), _render_run_result)
+    exit_code = 1 if run.status == "error" else 0
+    formatter.output(run.model_dump(mode="json"), _render_run_result, exit_code=exit_code)
+    if exit_code:
+        raise typer.Exit(code=exit_code)
 
 
 @agent_app.command("runs")

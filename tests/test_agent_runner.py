@@ -14,6 +14,7 @@ The two surfaces under test:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -632,6 +633,40 @@ class TestStreamErrorSurfacing:
         assert "exited with code 1" in data["error"]
         # Stderr tail surfaces the root cause verbatim.
         assert "trusted directory" in data["error"]
+
+    @pytest.mark.asyncio
+    async def test_long_pipe_lines_keep_event_boundaries(self, tmp_path: Path) -> None:
+        from keboola_agent_cli.server.agent_runner import stream_ai_agent_events
+
+        long_text = "é" * 90_000
+        result = {"type": "result", "result": long_text}
+        stdout = json.dumps({"type": "system"}) + "\n" + json.dumps(result, ensure_ascii=False)
+        stderr = f"\n{long_text}\ntail\n"
+        proc = _FakeProc(stdout.encode(), stderr.encode())
+        with patch(
+            "keboola_agent_cli.server.agent_runner.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=proc),
+        ):
+            events = [
+                evt
+                async for evt in stream_ai_agent_events(
+                    _make_registry(tmp_path),
+                    {"cli": "claude", "prompt": "ok", "timeout": 1},
+                )
+            ]
+
+        assert [evt["data"] for evt in events if evt["event"] == "stdout"] == [
+            {"type": "system"},
+            result,
+        ]
+        assert [evt["data"]["raw"] for evt in events if evt["event"] == "stderr"] == [
+            "",
+            long_text,
+            "tail",
+        ]
+        assert events[-1]["event"] == "done"
+        assert events[-1]["data"]["status"] == "ok"
+        assert events[-1]["data"]["response"] == long_text
 
     @pytest.mark.asyncio
     async def test_successful_run_does_not_set_error_field(self, tmp_path: Path) -> None:

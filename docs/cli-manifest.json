@@ -101,7 +101,7 @@
       "kind": "command",
       "hidden": false,
       "category": "write",
-      "help": "Trigger a task immediately (does not wait for the next cron firing).\n\nBy default blocks until the run finishes and prints the AgentRun\nrecord. Use ``--stream`` to render live events as they arrive (one\nline per event in human mode, NDJSON in --json mode).\n\n``--runtime-prompt`` is a shortcut for ai_agent tasks (most common\nuse case for manual tasks). For full control over the runtime merge,\npass ``--runtime-input '{\"key\": \"value\"}'``.",
+      "help": "Trigger a task immediately (does not wait for the next cron firing).\n\nBy default blocks until the run finishes and prints the AgentRun\nrecord. Use ``--stream`` to render live events as they arrive (one\nline per event in human mode, NDJSON in --json mode). Failed or\ntimed-out runs exit 1 in either mode.\n\n``--runtime-prompt`` is a shortcut for ai_agent tasks (most common\nuse case for manual tasks). For full control over the runtime merge,\npass ``--runtime-input '{\"key\": \"value\"}'``.",
       "params": [
         {"kind": "option", "name": "task_id", "opts": ["--task-id"], "type": "text", "required": true, "default": null, "help": "Task ID to run."},
         {"kind": "option", "name": "stream", "opts": ["--stream"], "type": "boolean", "is_flag": true, "default": false, "help": "Stream events live (each event on its own line / NDJSON in --json mode)."},

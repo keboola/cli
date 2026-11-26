@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import patch
 
 import pytest
@@ -221,17 +221,50 @@ class TestRunMocked:
         )
         return json.loads(created.output)["data"]["id"]
 
-    def test_run_blocking_returns_ok(self, tmp_path: Path, task_id: str) -> None:
+    @pytest.mark.parametrize("stream", [False, True])
+    @pytest.mark.parametrize("json_mode", [False, True])
+    @pytest.mark.parametrize(
+        ("status", "error", "exit_code"),
+        [("ok", None, 0), ("error", "Agent failed", 1), ("error", "Agent timed out", 1)],
+    )
+    def test_run_exit_matches_status(
+        self,
+        tmp_path: Path,
+        task_id: str,
+        stream: bool,
+        json_mode: bool,
+        status: Literal["ok", "error"],
+        error: str | None,
+        exit_code: int,
+    ) -> None:
         async def _fake(t, _registry, store, **_kwargs) -> AgentRun:
-            run = AgentRun(task_id=t.id, started_at="2026-01-01T00:00:00+00:00", status="ok")
+            run = AgentRun(
+                task_id=t.id, started_at="2026-01-01T00:00:00+00:00", status=status, error=error
+            )
             store.append_run(run)
             return run
 
+        args = ["--stream"] if stream else []
         with patch("keboola_agent_cli.services.agent_service.run_task_once", side_effect=_fake):
-            result = _invoke(tmp_path, "agent", "run", "--task-id", task_id, json_mode=True)
-        assert result.exit_code == 0
-        run = json.loads(result.output)["data"]
-        assert run["status"] == "ok"
+            result = _invoke(
+                tmp_path, "agent", "run", "--task-id", task_id, *args, json_mode=json_mode
+            )
+        assert result.exit_code == exit_code
+        if not json_mode:
+            assert f"status={status}" in result.output
+            if error:
+                assert error in result.output
+            return
+        if stream:
+            events = [json.loads(line) for line in result.stdout.splitlines()]
+            assert [event["event"] for event in events] == ["init", "done"]
+            run = events[-1]["data"]
+        else:
+            body = json.loads(result.stdout)
+            assert body["exit_code"] == exit_code
+            run = body["data"]
+        assert run["status"] == status
+        assert run["error"] == error
 
     def test_run_with_runtime_prompt(self, tmp_path: Path) -> None:
         # An ai_agent task is needed to exercise the runtime-prompt merge.
