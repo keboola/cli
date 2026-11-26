@@ -52,8 +52,8 @@ from ._helpers import (
     get_formatter,
     get_service,
     handle_service_call,
-    parse_json_arg,
     service_error_exit_code,
+    structured_input,
 )
 
 rls_app = typer.Typer(
@@ -81,9 +81,11 @@ TARGET_HELP = (
 DEFAULT_POLICY_LIST_LIMIT = 100
 TABLE_HELP = "Storage table ID, e.g. in.c-crm.invoices"
 DEFAULT_HELP = (
-    "JSON|@file|- condition for identities no rule matches, e.g. '{\"false\": true}' (no rows); "
+    "Inline JSON condition for identities no rule matches, e.g. '{\"false\": true}' (no rows); "
     "omitted, an ordinary reader gets no rows and an administrator the 403"
 )
+DEFAULT_FILE_HELP = "Read the JSON default condition from a file, or - for stdin"
+RULES_FILE_HELP = "Read the JSON rules array from a file, or - for stdin"
 
 
 @dataclass(frozen=True)
@@ -217,34 +219,44 @@ def _print_warnings(formatter: Any, result: dict[str, Any]) -> None:
         formatter.warning(warning)
 
 
-def _parse_rules_arg(formatter: Any, raw: str, shape: str) -> list[dict[str, Any]]:
-    """Parse ``--rules``; ``shape`` is only the hint in the error."""
+def _parse_rules_arg(
+    formatter: Any, shape: str, raw: str | None, file: str | None
+) -> list[dict[str, Any]] | None:
+    """Parse optional rules; ``shape`` is only the hint in the error."""
+    if raw is None and file is None:
+        return None
     try:
-        parsed = parse_json_arg(raw, label="--rules")
+        parsed = structured_input(raw, file, label="--rules")
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
     if not isinstance(parsed, list):
+        label = "--rules-file" if file is not None else "--rules"
         formatter.error(
-            message=f"--rules must be a JSON array of {shape} objects",
+            message=f"{label} must be a JSON array of {shape} objects",
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None
     return parsed
 
 
-def _parse_default_arg(formatter: Any, raw: str | None) -> dict[str, Any] | None:
-    """Parse ``--default`` (a condition object), or ``None`` when the option was not given."""
-    if raw is None:
+def _parse_default_arg(
+    formatter: Any, raw: str | None, file: str | None, *, rules_file: str | None
+) -> dict[str, Any] | None:
+    """Parse an optional default condition object."""
+    if raw is None and file is None:
         return None
     try:
-        parsed = parse_json_arg(raw, label="--default")
+        if file == rules_file == "-":
+            raise ValueError("--rules-file and --default-file cannot both read stdin.")
+        parsed = structured_input(raw, file, label="--default")
     except ValueError as exc:
         formatter.error(message=str(exc), error_code=ErrorCode.INVALID_ARGUMENT)
         raise typer.Exit(code=2) from None
     if not isinstance(parsed, dict):
+        label = "--default-file" if file is not None else "--default"
         formatter.error(
-            message='--default must be a JSON condition object, e.g. {"false": true}',
+            message=f'{label} must be a JSON condition object, e.g. {{"false": true}}',
             error_code=ErrorCode.INVALID_ARGUMENT,
         )
         raise typer.Exit(code=2) from None
@@ -304,7 +316,8 @@ def create_policy(
     ctx: typer.Context,
     group: PolicyGroup,
     *,
-    rules: str,
+    rules: str | None,
+    rules_file: str | None,
     scope: PolicyScope,
     target_project: list[str] | None,
     dry_run: bool,
@@ -314,9 +327,15 @@ def create_policy(
     """``rls create`` / ``cls create``; ``kwargs`` are ``alias``/``table``/``dialect``."""
     gate_scope(ctx, group, scope, target_project)
     formatter = get_formatter(ctx)
+    parsed_rules = _parse_rules_arg(formatter, group.rules_shape, rules, rules_file)
+    if parsed_rules is None:
+        formatter.error(
+            message="Pass one of --rules or --rules-file.", error_code=ErrorCode.INVALID_ARGUMENT
+        )
+        raise typer.Exit(code=2)
     service = get_service(ctx, group.service)
     kwargs |= {
-        "rules": _parse_rules_arg(formatter, rules, group.rules_shape),
+        "rules": parsed_rules,
         "scope": scope.value,
         "target_projects": target_project,
     }
@@ -345,6 +364,7 @@ def update_policy(
     group: PolicyGroup,
     *,
     rules: str | None,
+    rules_file: str | None,
     target_project: list[str] | None,
     clear_target_projects: bool,
     dry_run: bool,
@@ -353,9 +373,7 @@ def update_policy(
 ) -> None:
     """``rls update`` / ``cls update``; ``kwargs`` are ``alias``/``policy_id``/``table``/``dialect``."""
     formatter = get_formatter(ctx)
-    parsed_rules = (
-        _parse_rules_arg(formatter, rules, group.rules_shape) if rules is not None else None
-    )
+    parsed_rules = _parse_rules_arg(formatter, group.rules_shape, rules, rules_file)
     if clear_target_projects and target_project:
         formatter.error(
             message="--clear-target-projects cannot be combined with --target-project",
@@ -476,17 +494,19 @@ def rls_create(
         help="Project alias -- the project that owns the policy (default: the active project)",
     ),
     table_id: str = typer.Option(..., "--table-id", help=TABLE_HELP),
-    rules: str = typer.Option(
-        ...,
+    rules: str | None = typer.Option(
+        None,
         "--rules",
         help=(
-            "JSON|@file|- array of {subjects|groups, condition} objects (subjects are '<idp>|<sub>', "
+            "Inline JSON array of {subjects|groups, condition} objects (subjects are '<idp>|<sub>', "
             "an administrator behind a Storage token is 'keboola|<user id>'; '[\"*\"]' is every identified "
             "reader; an email is not allowed); rules matching one identity combine with OR "
-            "(see rls-workflow.md for the condition shape)"
+            "(see rls-workflow.md for the condition shape). Pass exactly one of --rules or --rules-file."
         ),
     ),
+    rules_file: str | None = typer.Option(None, "--rules-file", help=RULES_FILE_HELP),
     default: str | None = typer.Option(None, "--default", help=DEFAULT_HELP),
+    default_file: str | None = typer.Option(None, "--default-file", help=DEFAULT_FILE_HELP),
     dialect: Dialect | None = typer.Option(None, "--dialect", help=DIALECT_HELP),
     scope: PolicyScope = typer.Option(PolicyScope.TARGETED, "--scope", help=SCOPE_HELP),
     target_project: list[str] | None = typer.Option(None, "--target-project", help=TARGET_HELP),
@@ -501,9 +521,12 @@ def rls_create(
         RLS,
         alias=project,
         table=table_id,
-        default=_parse_default_arg(get_formatter(ctx), default),
+        default=_parse_default_arg(
+            get_formatter(ctx), default, default_file, rules_file=rules_file
+        ),
         dialect=dialect,
         rules=rules,
+        rules_file=rules_file,
         scope=scope,
         target_project=target_project,
         dry_run=dry_run,
@@ -523,13 +546,15 @@ def rls_update(
         None, "--dialect", help="New dialect, must match the project backend (unset = unchanged)"
     ),
     rules: str | None = typer.Option(
-        None, "--rules", help="New JSON|@file|- rules array (unset = unchanged)"
+        None, "--rules", help="New inline JSON rules array (unset = unchanged)"
     ),
+    rules_file: str | None = typer.Option(None, "--rules-file", help=RULES_FILE_HELP),
     default: str | None = typer.Option(
         None,
         "--default",
-        help="New default condition (unset = unchanged; to remove one, recreate the policy)",
+        help="New inline JSON default condition (unset = unchanged; to remove one, recreate the policy)",
     ),
+    default_file: str | None = typer.Option(None, "--default-file", help=DEFAULT_FILE_HELP),
     target_project: list[str] | None = typer.Option(
         None, "--target-project", help=f"{TARGET_HELP}; replaces the list (unset = unchanged)"
     ),
@@ -554,9 +579,12 @@ def rls_update(
         alias=project,
         policy_id=policy_id,
         table=table_id,
-        default=_parse_default_arg(get_formatter(ctx), default),
+        default=_parse_default_arg(
+            get_formatter(ctx), default, default_file, rules_file=rules_file
+        ),
         dialect=dialect,
         rules=rules,
+        rules_file=rules_file,
         target_project=target_project,
         clear_target_projects=clear_target_projects,
         dry_run=dry_run,
@@ -718,7 +746,12 @@ def rls_setup(
     rules: str | None = typer.Option(
         None,
         "--rules",
-        help="JSON|@file|- rules array -- skips the interactive condition builder",
+        help="Inline JSON rules array -- skips the interactive condition builder",
+    ),
+    rules_file: str | None = typer.Option(
+        None,
+        "--rules-file",
+        help="Read the JSON rules array from a file, or - from the terminal; skips the condition builder",
     ),
     scope: PolicyScope = typer.Option(PolicyScope.TARGETED, "--scope", help=SCOPE_HELP),
     target_project: list[str] | None = typer.Option(None, "--target-project", help=TARGET_HELP),
@@ -761,11 +794,11 @@ def rls_setup(
         formatter.console.print("No tables selected.")
         raise typer.Exit(code=0)
 
-    parsed_rules = (
-        _parse_rules_arg(formatter, rules, RLS.rules_shape)
-        if rules is not None
-        else _build_rules_interactively(formatter)
-    )
+    if rules is None and rules_file == "-":
+        formatter.console.print("Enter the JSON rules array, then send EOF.")
+    parsed_rules = _parse_rules_arg(formatter, RLS.rules_shape, rules, rules_file)
+    if parsed_rules is None:
+        parsed_rules = _build_rules_interactively(formatter)
     service = get_service(ctx, RLS.service)
     selected_tables = [str(tables[i]["id"]) for i in indices]
     policies = f"{len(selected_tables)} RLS polic{'y' if len(selected_tables) == 1 else 'ies'}"

@@ -202,6 +202,65 @@ class TestCreate:
         assert kwargs["rules"][0]["visible_columns"] == ["id", "region"]
         assert kwargs["dry_run"] is False
 
+    @pytest.mark.parametrize(
+        "command,identity",
+        [("create", ["--table-id", "in.c-crm.invoices"]), ("update", ["--policy-id", "p-1"])],
+    )
+    @pytest.mark.parametrize("stdin", [False, True])
+    def test_rules_file_and_stdin(
+        self, tmp_path: Path, command: str, identity: list[str], stdin: bool
+    ) -> None:
+        service = MagicMock()
+        method = getattr(service, f"{command}_policy")
+        method.return_value = _preview()
+        path = tmp_path / "rules.json"
+        path.write_text(RULES_JSON, encoding="utf-8")
+        result = _run(
+            [
+                "--json",
+                "cls",
+                command,
+                "--project",
+                "prod",
+                *identity,
+                "--rules-file",
+                "-" if stdin else str(path),
+                "--dry-run",
+            ],
+            tmp_path,
+            service,
+            input=RULES_JSON if stdin else None,
+        )
+
+        assert result.exit_code == 0, result.output
+        assert method.call_args.kwargs["rules"] == json.loads(RULES_JSON)
+        assert method.call_args.kwargs["dry_run"] is True
+
+    def test_missing_rules_file_names_the_file_option(self, tmp_path: Path) -> None:
+        service = MagicMock()
+        missing = tmp_path / "missing.json"
+        result = _run(
+            [
+                "--json",
+                "cls",
+                "create",
+                "--project",
+                "prod",
+                "--table-id",
+                "in.c-crm.invoices",
+                "--rules-file",
+                str(missing),
+            ],
+            tmp_path,
+            service,
+        )
+
+        assert result.exit_code == 2, result.output
+        error = json.loads(result.output)["error"]
+        assert error["code"] == ErrorCode.INVALID_ARGUMENT.value
+        assert error["message"] == f"--rules-file: file not found: {missing}"
+        service.create_policy.assert_not_called()
+
     def test_dry_run_prints_projection_without_prompt(self, tmp_path: Path) -> None:
         service = MagicMock()
         service.create_policy.return_value = _preview(dry_run=True)

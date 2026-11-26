@@ -446,7 +446,8 @@ does not name is refused. With an `rls-policy` too, rows come from the `rls-poli
 
   cls create
     --rules is a JSON array of {subjects|groups,
-    visible_columns: [col, ...]} objects. --dry-run prints each selector's
+    visible_columns: [col, ...]} objects. Create/update also accept
+    --rules-file PATH (use - for stdin). --dry-run prints each selector's
     allowed projection without writing.
 """,
     "component": """\
@@ -1726,6 +1727,8 @@ allow this query`. The identity that queries needs a matching rule.
     requires it, 1.0.0, gets the project backend). --target-project (alias or ID, repeatable or
     comma-separated) grants other projects. --dry-run previews the compiled
     condition (columns quoted like the enforcement) without writing.
+    Create/update also accept --rules-file and --default-file, with a path
+    or - for stdin. Do not combine a file option with its inline counterpart.
   rls update
     Partial update (PATCH of the changed keys only); the merged policy is
     validated first and the result is re-read after the write. A default
@@ -1737,7 +1740,7 @@ allow this query`. The identity that queries needs a matching rule.
   rls setup
     INTERACTIVE-TERMINAL-ONLY wizard: checkbox table picker (reuses
     `storage tables`), then the interactive column/op/value condition
-    builder or the same --rules escape hatch `create` takes, then a preview
+    builder or prepared --rules/--rules-file input, then a preview
     + confirm, then one `rls create` call per selected table. Under --json or
     without an interactive terminal it exits 2 (INVALID_ARGUMENT) pointing at
     `rls create`.
