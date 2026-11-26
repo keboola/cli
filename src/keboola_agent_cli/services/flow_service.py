@@ -1140,9 +1140,10 @@ class FlowService(BaseService):
 
         Each schedule is first deregistered from the Scheduler Service (so
         the cron trigger stops firing), then its Storage config is deleted.
-        A missing service-side registration is ignored; other deregistration
-        failures are reported via ``warnings`` and do not block the Storage
-        config deletion. A schedule whose config could not be deleted is
+        A missing service-side registration is ignored. A network failure
+        aborts removal before deleting the affected Storage config; other
+        deregistration failures are reported via ``warnings`` and do not
+        block its deletion. A schedule whose config could not be deleted is
         listed in ``errors`` (``{schedule_id, error}``); when no schedule
         could be deleted, the call raises ``SCHEDULE_DELETE_FAILED`` instead.
 
@@ -1175,6 +1176,8 @@ class FlowService(BaseService):
                         try:
                             scheduler.remove_schedule(sched_id)
                         except KeboolaApiError as exc:
+                            if exc.error_code in {ErrorCode.CONNECTION_ERROR, ErrorCode.TIMEOUT}:
+                                raise
                             if exc.error_code != ErrorCode.NOT_FOUND:
                                 logger.warning(
                                     "Scheduler Service deregistration failed: %s", exc.message

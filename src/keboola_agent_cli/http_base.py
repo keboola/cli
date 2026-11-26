@@ -202,9 +202,9 @@ class BaseHttpClient:
         A 5xx (and a read/write timeout) is only repeated on an idempotent
         method -- see ``RETRY_SAFE_METHODS``. Repeating a failed POST/PATCH can
         duplicate server-side state the caller never gets to see, so those fail
-        on the first attempt with a message saying so (issue #599). A 429 and a
-        refused connection are repeated on every method: in both cases the
-        server provably did not process the request.
+        on the first attempt with a message saying so (issue #599). A 429 or
+        a failed connection (including a refused proxy tunnel) is repeated
+        on every method: the server did not process the request.
 
         Args:
             method: HTTP method (GET, POST, etc.).
@@ -326,7 +326,7 @@ class BaseHttpClient:
                     retryable=timeout_repeatable,
                 ) from exc
 
-            except httpx.ConnectError as exc:
+            except (httpx.ConnectError, httpx.ProxyError) as exc:
                 if attempt < attempts - 1:
                     delay = BACKOFF_BASE * (2**attempt)
                     logger.debug(
