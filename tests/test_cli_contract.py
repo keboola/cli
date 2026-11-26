@@ -773,6 +773,7 @@ COMMANDS_DIR = Path(__file__).resolve().parent.parent / "src" / "keboola_agent_c
 # Commands whose exit code after a success envelope is a negative answer, not a
 # failed item (O4). Each one processes one subject.
 VERDICT_EXITS = {
+    "agent.py:agent_run": "the requested run failed or timed out",
     "auth.py:auth_status": "session missing or expired",
     "data_app.py:data_app_validate_repo": "the repository check found a blocking problem",
     "flow.py:flow_validate": "the flow definition is not valid",
