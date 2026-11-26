@@ -52,6 +52,7 @@ def _invoke(
     *,
     store: ConfigStore,
     data_app_mock: MagicMock,
+    input: str | None = None,
 ):
     """Run the CLI with cli.py services patched to mocks."""
     with (
@@ -66,7 +67,7 @@ def _invoke(
         MockCfg.return_value = ConfigService(config_store=store)
         MockJob.return_value = JobService(config_store=store)
         MockDataAppService.return_value = data_app_mock
-        return runner.invoke(app, args)
+        return runner.invoke(app, args, input=input)
 
 
 # ---------------------------------------------------------------------------
@@ -612,6 +613,26 @@ class TestDataAppDeploy:
 
 
 class TestDataAppDelete:
+    def test_delete_prompt_distinguishes_app_from_storage_config(self, tmp_path: Path) -> None:
+        store = _setup_config(tmp_path, {"prod": {"token": TEST_TOKEN}})
+        mock = MagicMock()
+        with patch(
+            "keboola_agent_cli.commands._helpers.is_interactive_terminal", return_value=True
+        ):
+            result = _invoke(
+                ["data-app", "delete", "--project", "prod", "--app-id", "42"],
+                store=store,
+                data_app_mock=mock,
+                input="n\n",
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "The app cannot be restored" in result.stderr
+        assert "The Storage config moves to the trash" in result.stderr
+        assert "restoring it does not restore the app" in result.stderr
+        assert "Aborted." in result.output
+        mock.delete_data_app.assert_not_called()
+
     def test_delete_with_yes(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "config"
         config_dir.mkdir()

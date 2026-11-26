@@ -687,7 +687,8 @@ def data_app_delete(
         formatter,
         yes,
         f"Delete data app {app_id} in '{project}'? "
-        "This deletes the deployment AND the Storage config (irreversible).",
+        "The app cannot be restored, and its deployments are stopped. "
+        "The Storage config moves to the trash; restoring it does not restore the app.",
     )
 
     try:
