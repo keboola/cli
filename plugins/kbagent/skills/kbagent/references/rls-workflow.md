@@ -289,9 +289,9 @@ kbagent rls setup --project prod
 #        menu: comparison / IN-NOT_IN / IS NULL-IS NOT NULL / always-true,
 #        with an "add another rule?" loop. A typed value is read as JSON when
 #        it is one (42, 4.5, true); quote it ("42") to keep a string. Or
-#    (b) skip the builder entirely with a prepared --rules file for
+#    (b) skip the builder entirely with a prepared rules file for
 #        anything beyond a single simple comparison per selector:
-kbagent rls setup --project prod --rules @rls_rules.json
+kbagent rls setup --project prod --rules-file rls_rules.json
 
 # 4. It prints a compiled-condition preview per selected table, then a
 #    single confirm (skip with --yes) before creating one `rls-policy`
@@ -302,8 +302,11 @@ kbagent rls setup --project prod --rules @rls_rules.json
 ## Workflow 2 -- Scripted / non-interactive policy creation
 
 The path for CI, batch onboarding, or any AI-agent-driven invocation.
-`--rules` always takes the same `JSON|@file|-` form the rest of kbagent uses
-for structured input (see e.g. `config update --configuration`).
+Use `--rules JSON` for inline rules, or `--rules-file PATH` to read a JSON rules array (since vNEXT).
+Pass `--rules-file -` to read it from stdin. RLS `--default` and
+`--default-file PATH` work the same way for the default condition object.
+Do not pass both the inline and file option for the same value.
+For piped input, use `rls create` or `rls update`, not the interactive `rls setup` wizard.
 
 ```bash
 # 1. Write the rules array to a file (or build it inline for something
@@ -327,7 +330,7 @@ EOF
 kbagent --json rls create \
   --project prod \
   --table-id in.c-crm.invoices \
-  --rules @rls_rules.json \
+  --rules-file rls_rules.json \
   --dry-run
 # -> {"table": "in.c-crm.invoices",
 #     "scope": "targeted", "target_project_ids": [], "preview": [
@@ -338,7 +341,7 @@ kbagent --json rls create \
 
 # 3. Then the real write (still --json for a clean, single-document
 #    response -- no confirmation prompt in --json mode):
-kbagent --json rls create --project prod --table-id in.c-crm.invoices --rules @rls_rules.json
+kbagent --json rls create --project prod --table-id in.c-crm.invoices --rules-file rls_rules.json
 ```
 
 A reader with no rule on a governed table reads nothing -- fail-closed is the
@@ -435,7 +438,7 @@ cat > orders_rules.json <<'EOF'
 ]
 EOF
 kbagent --json rls create --project prod --table-id in.c-sales.orders \
-  --rules @orders_rules.json --default '{"false": true}' --dry-run
+  --rules-file orders_rules.json --default '{"false": true}' --dry-run
 ```
 
 A reader in `sales-eu` and `sales-reps` sees
@@ -501,7 +504,7 @@ create a `targeted` one instead.
 kbagent --json rls create \
   --project prod \
   --table-id in.c-crm.invoices \
-  --rules @rls_rules.json \
+  --rules-file rls_rules.json \
   --target-project customer-a,33333 \
   --dry-run
 # -> {"scope": "targeted", "target_project_ids": [22222, 33333], ...}
@@ -523,10 +526,10 @@ result is read back after the write.
 kbagent --json rls update \
   --project prod \
   --policy-id <id> \
-  --rules @updated_rls_rules.json \
+  --rules-file updated_rls_rules.json \
   --dry-run   # preview first, same as create
 
-kbagent --json rls update --project prod --policy-id <id> --rules @updated_rls_rules.json
+kbagent --json rls update --project prod --policy-id <id> --rules-file updated_rls_rules.json
 
 # Delete the policy (this does not open the table: with no other policy it is unreadable). Show it first, then delete:
 kbagent --json rls delete --project prod --policy-id <id> --dry-run
@@ -627,8 +630,8 @@ kbagent cls create --project prod --table-id in.c-crm.customers \
   --rules '[{"groups":["analysts"],"visible_columns":["id","region","amount"]},
             {"subjects":["keboola|1234","keboola|5678"],"visible_columns":["id"]}]' --dry-run
 
-kbagent cls create --project prod --table-id in.c-crm.customers --rules @cls_rules.json --yes
-kbagent --json cls update --project prod --policy-id <id> --rules @cls_rules_v2.json
+kbagent cls create --project prod --table-id in.c-crm.customers --rules-file cls_rules.json --yes
+kbagent --json cls update --project prod --policy-id <id> --rules-file cls_rules_v2.json
 kbagent cls delete --project prod --policy-id <id> --yes
 ```
 

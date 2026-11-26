@@ -34,6 +34,7 @@ from ._helpers import check_cli_permission
 from .rls import (
     DEFAULT_POLICY_LIST_LIMIT,
     DIALECT_HELP,
+    RULES_FILE_HELP,
     SCOPE_HELP,
     TABLE_HELP,
     TARGET_HELP,
@@ -124,14 +125,15 @@ def cls_create(
         help="Project alias -- the project that owns the policy (default: the active project)",
     ),
     table_id: str = typer.Option(..., "--table-id", help=TABLE_HELP),
-    rules: str = typer.Option(
-        ...,
+    rules: str | None = typer.Option(
+        None,
         "--rules",
         help=(
-            f"JSON|@file|- array of {CLS.rules_shape} objects; visible_columns is the "
-            "allowlist of columns the selected readers can read"
+            f"Inline JSON array of {CLS.rules_shape} objects; visible_columns is the "
+            "allowlist of columns the selected readers can read. Pass exactly one of --rules or --rules-file."
         ),
     ),
+    rules_file: str | None = typer.Option(None, "--rules-file", help=RULES_FILE_HELP),
     dialect: Dialect | None = typer.Option(None, "--dialect", help=DIALECT_HELP),
     scope: PolicyScope = typer.Option(PolicyScope.TARGETED, "--scope", help=SCOPE_HELP),
     target_project: list[str] | None = typer.Option(None, "--target-project", help=TARGET_HELP),
@@ -146,6 +148,7 @@ def cls_create(
         table=table_id,
         dialect=dialect,
         rules=rules,
+        rules_file=rules_file,
         scope=scope,
         target_project=target_project,
         dry_run=dry_run,
@@ -165,8 +168,9 @@ def cls_update(
         None, "--dialect", help="New dialect, must match the project backend (unset = unchanged)"
     ),
     rules: str | None = typer.Option(
-        None, "--rules", help="New JSON|@file|- rules array (unset = unchanged)"
+        None, "--rules", help="New inline JSON rules array (unset = unchanged)"
     ),
+    rules_file: str | None = typer.Option(None, "--rules-file", help=RULES_FILE_HELP),
     target_project: list[str] | None = typer.Option(
         None, "--target-project", help=f"{TARGET_HELP}; replaces the list (unset = unchanged)"
     ),
@@ -191,6 +195,7 @@ def cls_update(
         table=table_id,
         dialect=dialect,
         rules=rules,
+        rules_file=rules_file,
         target_project=target_project,
         clear_target_projects=clear_target_projects,
         dry_run=dry_run,

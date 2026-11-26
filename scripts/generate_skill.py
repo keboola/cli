@@ -37,6 +37,7 @@ END_MARKER = "<!-- END AUTO-GENERATED COMMANDS -->"
 # Commands to skip in the table (utility / meta commands that the AI agent
 # does not typically need to choose between in a decision table)
 SKIP_COMMANDS = {"context", "version", "init", "doctor", "repl"}
+REQUIRED_CHOICE_EXAMPLES = {("cls create", "rules"), ("rls create", "rules")}
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +147,9 @@ def _collect_commands(
             # every command (plugin rule in docs/migrate-to-1.0.md, "Plugin").
             project = target_project_param(cmd)
             param_parts = [
-                _format_param(p, shown=p is project)
+                _format_param(
+                    p, shown=p is project or (full_name, p.name) in REQUIRED_CHOICE_EXAMPLES
+                )
                 for p in cmd.params
                 if p.name not in ("help", "ctx")
             ]

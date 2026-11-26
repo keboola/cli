@@ -151,9 +151,10 @@ Manage column-level security policies (metastore-backed, per-reader column
 allowlist). 'list'/'detail'/'schema' are read-only; 'create'/'update'/'delete'
 are gated as admin -- see CONTRIBUTING.md.
 
-  kbagent cls create [--project PROJECT] --table-id ID --rules RULES
-      [--dialect snowflake|bigquery] [--scope targeted|organization]
-      [--target-project PROJECT ...] [--dry-run] [--yes]
+  kbagent cls create [--project PROJECT] --table-id ID [--rules RULES]
+      [--rules-file FILE] [--dialect snowflake|bigquery]
+      [--scope targeted|organization] [--target-project PROJECT ...]
+      [--dry-run] [--yes]
     Create one CLS policy for one table (``targeted`` scope unless ``--scope
     organization``).
 
@@ -171,7 +172,7 @@ are gated as admin -- see CONTRIBUTING.md.
     Print the live ``cls-policy`` JSON Schema fetched from the metastore.
 
   kbagent cls update [--project PROJECT] --policy-id ID [--table-id ID]
-      [--dialect snowflake|bigquery] [--rules RULES]
+      [--dialect snowflake|bigquery] [--rules RULES] [--rules-file FILE]
       [--target-project PROJECT ...] [--clear-target-projects] [--dry-run]
       [--yes]
     Update an existing CLS policy.
@@ -906,10 +907,10 @@ gated as admin -- see CONTRIBUTING.md.
     Find the bindings whose workspace no longer exists; with --yes, delete
     them.
 
-  kbagent rls create [--project PROJECT] --table-id ID --rules RULES
-      [--default DEFAULT] [--dialect snowflake|bigquery]
-      [--scope targeted|organization] [--target-project PROJECT ...]
-      [--dry-run] [--yes]
+  kbagent rls create [--project PROJECT] --table-id ID [--rules RULES]
+      [--rules-file FILE] [--default DEFAULT] [--default-file FILE]
+      [--dialect snowflake|bigquery] [--scope targeted|organization]
+      [--target-project PROJECT ...] [--dry-run] [--yes]
     Create one RLS policy for one table (``targeted`` scope unless ``--scope
     organization``).
 
@@ -927,7 +928,7 @@ gated as admin -- see CONTRIBUTING.md.
     Print the live ``rls-policy`` JSON Schema fetched from the metastore.
 
   kbagent rls setup [--project PROJECT] [--dialect snowflake|bigquery]
-      [--rules RULES] [--scope targeted|organization]
+      [--rules RULES] [--rules-file FILE] [--scope targeted|organization]
       [--target-project PROJECT ...] [--yes]
     Guided RLS setup: pick tables, build a condition, preview, then write.
 
@@ -937,9 +938,9 @@ gated as admin -- see CONTRIBUTING.md.
     project.
 
   kbagent rls update [--project PROJECT] --policy-id ID [--table-id ID]
-      [--dialect snowflake|bigquery] [--rules RULES] [--default DEFAULT]
-      [--target-project PROJECT ...] [--clear-target-projects] [--dry-run]
-      [--yes]
+      [--dialect snowflake|bigquery] [--rules RULES] [--rules-file FILE]
+      [--default DEFAULT] [--default-file FILE] [--target-project PROJECT ...]
+      [--clear-target-projects] [--dry-run] [--yes]
     Update an existing RLS policy.
 """,
     "schedule": """\

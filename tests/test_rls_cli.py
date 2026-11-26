@@ -225,6 +225,79 @@ class TestRlsDefaultOption:
         method = service.create_policy if command[0] == "create" else service.update_policy
         assert method.call_args.kwargs["default"] == {"false": True}
 
+    @pytest.mark.parametrize(
+        "command,identity",
+        [("create", ["--table-id", "t.x"]), ("update", ["--policy-id", "p-1"])],
+    )
+    @pytest.mark.parametrize("stdin_flag", ["--rules-file", "--default-file"])
+    def test_rules_and_default_file_inputs(
+        self, tmp_path: Path, command: str, identity: list[str], stdin_flag: str
+    ) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        method = getattr(service, f"{command}_policy")
+        method.return_value = {**_policy_row(), "preview": []}
+        rules = [{"groups": ["analysts"], "condition": {"true": True}}]
+        default = {"false": True}
+        args = ["--json", "rls", command, *identity, "--project", "prod", "--dry-run"]
+        stdin = ""
+        for flag, content in [("--rules-file", rules), ("--default-file", default)]:
+            if flag == stdin_flag:
+                args.extend([flag, "-"])
+                stdin = json.dumps(content)
+            else:
+                path = tmp_path / f"{flag[2:]}.json"
+                path.write_text(json.dumps(content), encoding="utf-8")
+                args.extend([flag, str(path)])
+
+        result = _run(args, store, service, input=stdin)
+
+        assert result.exit_code == 0, result.output
+        assert method.call_args.kwargs["rules"] == rules
+        assert method.call_args.kwargs["default"] == default
+        assert method.call_args.kwargs["dry_run"] is True
+
+    @pytest.mark.parametrize(
+        "extra,message",
+        [
+            ([], "Pass one of --rules or --rules-file."),
+            (
+                ["--rules", "[]", "--rules-file", "-"],
+                "--rules and --rules-file are mutually exclusive",
+            ),
+            (
+                ["--default", "{}", "--default-file", "-"],
+                "--default and --default-file are mutually exclusive",
+            ),
+            (
+                ["--rules-file", "-", "--default-file", "-"],
+                "--rules-file and --default-file cannot both read stdin",
+            ),
+            (["--rules-file", "-"], "--rules-file must be a JSON array"),
+            (["--default-file", "-"], "--default-file: invalid JSON"),
+            (["--rules", "@rules.json"], "use --rules-file rules.json."),
+            (["--default", "-"], "use --default-file -."),
+        ],
+    )
+    def test_invalid_input_combinations(
+        self, tmp_path: Path, extra: list[str], message: str
+    ) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        stdin = "{}" if extra == ["--rules-file", "-"] else ""
+        result = _run(
+            ["--json", "rls", "create", "--project", "prod", "--table-id", "t.x", *extra],
+            store,
+            service,
+            input=stdin,
+        )
+
+        assert result.exit_code == 2, result.output
+        error = json.loads(result.output)["error"]
+        assert error["code"] == ErrorCode.INVALID_ARGUMENT.value
+        assert message in error["message"]
+        service.create_policy.assert_not_called()
+
     @pytest.mark.parametrize("raw", ["[1]", "not json"])
     def test_a_non_object_default_is_a_usage_error(self, tmp_path: Path, raw: str) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})
@@ -691,6 +764,42 @@ class TestRlsSetupReviewFixes:
         return storage
 
     RULES = '[{"subjects":["https://idp.example.com|a"],"condition":{"true":true}}]'
+
+    @pytest.mark.parametrize("stdin", [False, True])
+    def test_setup_rules_file_skips_the_condition_builder(
+        self, tmp_path: Path, stdin: bool
+    ) -> None:
+        store = _setup_config(tmp_path / "cfg", {"prod": {}})
+        service = MagicMock()
+        service.create_policy.return_value = {**_policy_row(), "preview": []}
+        path = tmp_path / "rules.json"
+        path.write_text(self.RULES, encoding="utf-8")
+        with (
+            patch("keboola_agent_cli.commands.rls._stdio_is_tty", return_value=True),
+            patch("keboola_agent_cli.commands.rls.checkbox_select", return_value=[0]),
+            patch("keboola_agent_cli.commands.rls._build_rules_interactively") as builder,
+        ):
+            result = _run(
+                [
+                    "rls",
+                    "setup",
+                    "--project",
+                    "prod",
+                    "--rules-file",
+                    "-" if stdin else str(path),
+                    "--yes",
+                ],
+                store,
+                service,
+                input=self.RULES if stdin else None,
+                storage_service=self._storage(),
+            )
+        assert result.exit_code == 0, result.output
+        builder.assert_not_called()
+        assert [call.kwargs["rules"] for call in service.create_policy.call_args_list] == [
+            json.loads(self.RULES),
+            json.loads(self.RULES),
+        ]
 
     def test_an_invalid_dialect_is_rejected_before_any_api_call(self, tmp_path: Path) -> None:
         store = _setup_config(tmp_path / "cfg", {"prod": {}})

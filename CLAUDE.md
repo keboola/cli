@@ -1581,10 +1581,10 @@ kbagent semantic-layer reference-data delete [--project P] --reference-data-id I
 kbagent rls list --project P [--limit N]
 kbagent rls detail --project P --policy-id ID
 kbagent rls schema --project P
-kbagent rls create --project P --table-id TABLE_ID --rules JSON|@file|- [--default JSON|@file|-] [--dialect snowflake|bigquery] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--dry-run] [--yes]
-kbagent rls update --project P --policy-id ID [--table-id TABLE_ID] [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--default JSON|@file|-] [--target-project ALIAS|ID ... | --clear-target-projects] [--dry-run] [--yes]
+kbagent rls create --project P --table-id TABLE_ID (--rules JSON | --rules-file PATH) [--default JSON | --default-file PATH] [--dialect snowflake|bigquery] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--dry-run] [--yes]
+kbagent rls update --project P --policy-id ID [--table-id TABLE_ID] [--dialect snowflake|bigquery] [--rules JSON | --rules-file PATH] [--default JSON | --default-file PATH] [--target-project ALIAS|ID ... | --clear-target-projects] [--dry-run] [--yes]
 kbagent rls delete --project P --policy-id ID [--dry-run] [--yes]
-kbagent rls setup --project P [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--yes]
+kbagent rls setup --project P [--dialect snowflake|bigquery] [--rules JSON | --rules-file PATH] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--yes]
 kbagent rls bind --project P --workspace-id ID [--rls-policy UUID ...] [--cls-policy UUID ...] [--stack-id STACK] [--dry-run]
 kbagent rls unbind --project P --workspace-id ID [--stack-id STACK] [--dry-run] [--yes]
 kbagent rls bindings --project P [--workspace-id ID]
@@ -1657,8 +1657,8 @@ kbagent rls bindings-sweep --project P [--older-than DAYS] [--dry-run | --yes]
 kbagent cls list --project P [--limit N]
 kbagent cls detail --project P --policy-id ID
 kbagent cls schema --project P
-kbagent cls create --project P --table-id TABLE_ID --rules JSON|@file|- [--dialect snowflake|bigquery] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--dry-run] [--yes]
-kbagent cls update --project P --policy-id ID [--table-id TABLE_ID] [--dialect snowflake|bigquery] [--rules JSON|@file|-] [--target-project ALIAS|ID ... | --clear-target-projects] [--dry-run] [--yes]
+kbagent cls create --project P --table-id TABLE_ID (--rules JSON | --rules-file PATH) [--dialect snowflake|bigquery] [--scope targeted|organization] [--target-project ALIAS|ID ...] [--dry-run] [--yes]
+kbagent cls update --project P --policy-id ID [--table-id TABLE_ID] [--dialect snowflake|bigquery] [--rules JSON | --rules-file PATH] [--target-project ALIAS|ID ... | --clear-target-projects] [--dry-run] [--yes]
 kbagent cls delete --project P --policy-id ID [--dry-run] [--yes]
 # cls: column-level security policy authoring (`cls-policy` object type, one object per
 #   protected table), sibling of `rls`: same scope default, write permissions, dialect check,
