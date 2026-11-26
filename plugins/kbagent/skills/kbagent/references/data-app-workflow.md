@@ -7,7 +7,7 @@ runtime type** -- one contract for Python, Node, and mixed Python + Node apps
 `streamlit`, `r`, and the other types still work, but only when you pass
 `--type` explicitly.
 
-**Never run `keboola.data-apps` as a job** (`job run` refuses it). Start an app with `data-app start` / `data-app deploy`. To start or restart it on a schedule or after other jobs, add a `keboola.data-app-control` task (`configData.parameters.appId`, optional `forceRestart`) to a flow.
+**Never run `keboola.data-apps` as a job.** Start an app with `data-app start` / `data-app deploy`. To start or restart it on a schedule or after other jobs, add a `keboola.data-app-control` task (`configData.parameters.appId`, optional `forceRestart`) to a flow.
 
 Two API surfaces own them:
 

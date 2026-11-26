@@ -676,7 +676,7 @@ git block, slug, runtime size, encrypted secrets) with the Data Science API
 explicit Storage config version, never the empty shell the create writes.
 To start or restart an app from a flow, add a `keboola.data-app-control` task
 (`configData.parameters.appId`, optional `forceRestart`). Do NOT run
-`keboola.data-apps` as a job: `job run` refuses it.
+`keboola.data-apps` as a job.
 
   data-app list
     List data apps across one or many projects. Merges Data Science /apps
