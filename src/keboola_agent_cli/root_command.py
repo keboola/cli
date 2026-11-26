@@ -71,6 +71,10 @@ REPEAT_REFUSED_CATEGORIES = frozenset({"write", "destructive", "admin"})
 REPEATED_OPTION_CODE = "REPEATED_OPTION"
 
 
+class ReportedExit(typer.Exit):
+    """Exit when the command already rendered its result, including a stream's done event."""
+
+
 class MissingCommandError(UsageError):
     """A group without a command, or a command without its arguments: exit 2, help on stderr.
 
@@ -389,6 +393,8 @@ class RootGroup(ProjectRefGroup):
                     ErrorCode.USAGE_ERROR,
                 )
             raise typer.Exit(code=exc.exit_code) from None
+        except ReportedExit:
+            raise
         except (typer.Exit, SystemExit) as exc:
             # A non-zero exit that wrote no document still writes one (O1).
             code = exc.exit_code if isinstance(exc, typer.Exit) else exc.code
