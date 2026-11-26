@@ -41,9 +41,19 @@ and with no per-project switch (since 1.2.0); an ordinary workspace is not
 filtered at all. A table that no `rls-policy` and no `cls-policy` applies to is not
 readable: an ordinary reader gets an empty result (HTTP 200, no rows), an administrator behind a Storage
 token gets the refusal `Row-level security does not allow this query` (HTTP 403).
-The `row-level-security` project feature is read only by the MCP server, to decide
-that its own workspace is created governed
-(see [The MCP server's workspace](#the-mcp-servers-workspace)).
+The `row-level-security` project feature does not switch the enforcement. It is
+read in two places. The MCP server reads it to decide that its own workspace is
+created governed (see [The MCP server's workspace](#the-mcp-servers-workspace)).
+The platform needs it to deploy a Data App whose configuration sets
+`runtime.workspace.rlsPolicies` or `runtime.workspace.clsPolicies`. Without it the
+deploy is refused with `Row-level security ("runtime.workspace.rlsPolicies") requires
+the "row-level-security" project feature, which this project does not have.` (for
+`clsPolicies` the message starts with `Column-level security`, for both lists with
+`Row- and column-level security`). One feature covers both RLS and CLS. During the
+free public beta (until 28 February 2027) a project admin turns it on in Project
+settings → Features. Such a deploy has a second requirement: the app must log in
+every path with OAuth/OIDC. A `password` provider, a public path or no login rule
+is refused with `... requires an OAuth/OIDC login ...`.
 
 **Who a rule selects (policy schema 1.2.0; since 1.2.0).** A rule selects readers
 by `subjects` -- `<idp>|<sub>` entries, the issuer of the identity provider, a `|`
@@ -121,7 +131,7 @@ Everything below is kbagent commands: no MCP server, no warehouse credentials.
 Workspace details and gotchas: [workspace-workflow.md](workspace-workflow.md#governed-workspace).
 
 ```bash
-# 1. A governed workspace (Snowflake, headless). The result has no password and
+# 1. A governed workspace (Snowflake or BigQuery, headless). The result has no password and
 #    no private_key: there is nothing to save. Note workspace_id.
 kbagent --json workspace create --project prod --name "governed-ws" --governed
 
@@ -160,11 +170,15 @@ is not a user's) is refused with the same 403.
 
 - `workspace password` is refused on a governed workspace, and so is any direct
   warehouse login: Query Service is the only reader.
-- `--governed` with `--ui` and `--governed` on a non-Snowflake backend are
+- `--governed` with `--ui` and `--governed` on a backend other than Snowflake or BigQuery are
   `INVALID_ARGUMENT` (exit 2). Nothing is created in either case.
 - Query Service always enforces the policies on a governed workspace, in every
-  project. The `row-level-security` project feature gates only whether the MCP
-  server creates its workspace governed.
+  project. The `row-level-security` project feature gates whether the MCP
+  server creates its workspace governed, and whether a Data App with
+  `rlsPolicies` / `clsPolicies` can be deployed (without it the deploy is refused
+  with `... requires the "row-level-security" project feature, which this project
+  does not have.`). A project admin enables it in Project settings → Features
+  during the free public beta (until 28 February 2027).
 
 ### Restrict one workspace to some policies (bindings)
 
@@ -235,6 +249,7 @@ In a Snowflake or BigQuery project with the `row-level-security` feature,
 
 ```bash
 kbagent feature project-add --project prod --feature row-level-security   # super-admin manage token, once per project
+#   during the public beta (until 28 February 2027) a project admin can instead turn it on in Project settings → Features
 kbagent --json workspace list --project prod            # the MCP workspace: login_type governed, name mcp-workspace-<hex>
 kbagent --json rls list --project prod                  # the policies it gets
 kbagent --json rls bind --project prod --workspace-id MCP_WS_ID --rls-policy ID --stack-id S   # optional: only some of them

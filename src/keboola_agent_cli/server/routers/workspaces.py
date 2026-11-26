@@ -23,7 +23,8 @@ class WorkspaceCreate(BaseModel):
     # True keeps the default of the project. False cannot be combined with ui_mode.
     read_only: bool = True
     ui_mode: bool = False
-    # Snowflake only, not with ui_mode: a workspace with no login that only Query Service reads.
+    # Snowflake or BigQuery, not with ui_mode: a workspace with no login that only
+    # Query Service reads.
     governed: bool = False
 
 

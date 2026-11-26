@@ -1605,7 +1605,9 @@ kbagent rls bindings-sweep --project P [--older-than DAYS] [--dry-run | --yes]
 #   here: its policies are the app configuration `runtime.workspace.rlsPolicies` and
 #   `runtime.workspace.clsPolicies` (independent lists of 1-100 policy UUIDs each; an app with neither is not
 #   governed; a changed list needs a redeploy), set with
-#   `config update --merge` and `data-app deploy`; `bind` never writes an app KID. `unbind` is destructive-class
+#   `config update --merge` and `data-app deploy`; the deploy is refused unless the project has the
+#   `row-level-security` feature and the app logs in every path with OAuth/OIDC (no `password` provider,
+#   no public path). `bind` never writes an app KID. `unbind` is destructive-class
 #   (looks the binding up, then confirms). `bindings-sweep` only reports unless --yes (destructive via
 #   FLAG_ESCALATIONS): orphaned = a workspace KID of this project whose workspace 404s in production
 #   and every dev branch AND last updated more than --older-than days (default 30) ago; any other

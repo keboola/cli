@@ -7832,6 +7832,13 @@ governed-workspace flow.
   query`). The MCP server's own workspace is created governed in a project with the
   `row-level-security` feature; it gets every policy unless bound (see `rls-workflow.md`, "The MCP server's
   workspace"). A Data App is bound by its configuration `runtime.workspace.rlsPolicies` / `clsPolicies`, not by `rls bind`.
+- **Deploying a Data App with policy lists has two requirements.** The project needs the `row-level-security`
+  feature: without it the deploy is refused with `Row-level security ("runtime.workspace.rlsPolicies") requires
+  the "row-level-security" project feature, which this project does not have.` (`Column-level security` /
+  `Row- and column-level security` for the other lists). One feature covers RLS and CLS. During the free public
+  beta (until 28 February 2027) a project admin turns it on in Project settings → Features. The app must also
+  log in every path with OAuth/OIDC: a `password` provider, a public path or no login rule is refused with
+  `... requires an OAuth/OIDC login ...`.
 - **Rules select readers by `subjects` or `groups`, never by email (since 1.2.0, schema 1.2.0).** A new
   `rls-policy` / `cls-policy` rule has exactly one of `subjects` (`<idp>|<sub>` entries, matched exactly)
   or `groups` (exact strings, any listed group matches); `["*"]` as the sole entry is every identified
