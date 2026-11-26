@@ -2012,10 +2012,11 @@ class ConfigService(BaseService):
 
         ai_client = self._ai_client_factory(project.stack_url, project.token)
         try:
-            try:
-                raw = ai_client.get_component_detail(component_id)
-            except KeboolaApiError:
-                return ("skipped", [])
+            raw = ai_client.get_component_detail(component_id)
+        except KeboolaApiError as exc:
+            if exc.error_code in {ErrorCode.CONNECTION_ERROR, ErrorCode.TIMEOUT}:
+                logger.warning("Schema validation skipped for %s: %s", component_id, exc.message)
+            return ("skipped", [])
         finally:
             ai_client.close()
 
