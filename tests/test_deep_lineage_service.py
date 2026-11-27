@@ -3,7 +3,6 @@
 import json
 import re
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 import yaml
@@ -466,8 +465,7 @@ class TestDeepLineageServiceScan:
         (tmp_path / "cfg").mkdir()
         service = DeepLineageService(config_store=store)
 
-        with patch.object(service, "_add_cross_project_lineage"):
-            result = service.build_lineage(root)
+        result = service.build_lineage(root)
 
         assert result["summary"]["tables"] == 2
         assert result["summary"]["configurations"] == 2
@@ -490,8 +488,7 @@ class TestDeepLineageServiceScan:
         (tmp_path / "cfg").mkdir()
         service = DeepLineageService(config_store=store)
 
-        with patch.object(service, "_add_cross_project_lineage"):
-            result = service.build_lineage(root)
+        result = service.build_lineage(root)
 
         graph = service._graph_from_dict(result)
         upstream = service.query_upstream(graph, "out.c-result.summary", "test-project")
@@ -505,8 +502,7 @@ class TestDeepLineageServiceScan:
         (tmp_path / "cfg").mkdir()
         service = DeepLineageService(config_store=store)
 
-        with patch.object(service, "_add_cross_project_lineage"):
-            result = service.build_lineage(root)
+        result = service.build_lineage(root)
 
         graph = service._graph_from_dict(result)
         downstream = service.query_downstream(graph, "in.c-source.accounts", "test-project")
@@ -519,8 +515,7 @@ class TestDeepLineageServiceScan:
         (tmp_path / "cfg").mkdir()
         service = DeepLineageService(config_store=store)
 
-        with patch.object(service, "_add_cross_project_lineage"):
-            result = service.build_lineage(root)
+        result = service.build_lineage(root)
 
         graph = service._graph_from_dict(result)
         res = service.query_upstream(graph, "nonexistent.table")
@@ -533,8 +528,7 @@ class TestDeepLineageServiceScan:
         (tmp_path / "cfg").mkdir()
         service = DeepLineageService(config_store=store)
 
-        with patch.object(service, "_add_cross_project_lineage"):
-            service.build_and_cache(root, cache_path)
+        service.build_and_cache(root, cache_path)
 
         assert cache_path.exists()
         graph = service.load_from_cache(cache_path)
@@ -848,8 +842,7 @@ class TestLineageDeepCli:
         (tmp_path / "cfg").mkdir()
         service = DeepLineageService(config_store=store)
 
-        with patch.object(service, "_add_cross_project_lineage"):
-            service.build_and_cache(root, cache_path)
+        service.build_and_cache(root, cache_path)
 
         runner_local = __import__("typer.testing", fromlist=["CliRunner"]).CliRunner()
         result = runner_local.invoke(
@@ -1030,8 +1023,7 @@ class TestDeepLineageLayouts:
         (tmp_path / "cfg").mkdir()
         service = DeepLineageService(config_store=store)
 
-        with patch.object(service, "_add_cross_project_lineage"):
-            result = service.build_lineage(root)
+        result = service.build_lineage(root)
 
         assert result["summary"]["tables"] == 1
         assert result["summary"]["configurations"] == 1
@@ -1059,8 +1051,7 @@ class TestDeepLineageLayouts:
         store.save(config)
 
         service = DeepLineageService(config_store=store)
-        with patch.object(service, "_add_cross_project_lineage"):
-            result = service.build_lineage(root)
+        result = service.build_lineage(root)
 
         # Exactly one table keyed by the ConfigStore alias, not by dir name.
         assert list(result["tables"].keys()) == ["prod:in.c-flat.accounts"]
@@ -1078,8 +1069,7 @@ class TestDeepLineageLayouts:
         store = ConfigStore(config_dir=cfg_dir)  # empty store
         service = DeepLineageService(config_store=store)
 
-        with patch.object(service, "_add_cross_project_lineage"):
-            result = service.build_lineage(root)
+        result = service.build_lineage(root)
 
         assert list(result["tables"].keys()) == ["my-alias:in.c-flat.accounts"]
 
@@ -1090,8 +1080,7 @@ class TestDeepLineageLayouts:
         (tmp_path / "cfg").mkdir()
         service = DeepLineageService(config_store=store)
 
-        with patch.object(service, "_add_cross_project_lineage"):
-            result = service.build_lineage(root)
+        result = service.build_lineage(root)
 
         assert result["summary"]["tables"] == 2
         assert result["summary"]["configurations"] == 2
@@ -1105,8 +1094,7 @@ class TestDeepLineageLayouts:
         (tmp_path / "cfg").mkdir()
         service = DeepLineageService(config_store=store)
 
-        with patch.object(service, "_add_cross_project_lineage"):
-            result = service.build_lineage(root)
+        result = service.build_lineage(root)
 
         assert result["summary"]["tables"] == 0
         assert result["summary"]["configurations"] == 0
@@ -1134,24 +1122,20 @@ class TestLineageBuildCli:
         _create_flat_project(synced)
         cache_path = tmp_path / "lineage.json"
 
-        with patch(
-            "keboola_agent_cli.services.deep_lineage_service."
-            "DeepLineageService._add_cross_project_lineage"
-        ):
-            result = self._runner().invoke(
-                app,
-                [
-                    "--json",
-                    "--config-dir",
-                    str(tmp_path / "cfg"),
-                    "lineage",
-                    "build",
-                    "--directory",
-                    str(synced),
-                    "--output",
-                    str(cache_path),
-                ],
-            )
+        result = self._runner().invoke(
+            app,
+            [
+                "--json",
+                "--config-dir",
+                str(tmp_path / "cfg"),
+                "lineage",
+                "build",
+                "--directory",
+                str(synced),
+                "--output",
+                str(cache_path),
+            ],
+        )
 
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)["data"]
@@ -1168,24 +1152,20 @@ class TestLineageBuildCli:
         empty.mkdir()
         cache_path = tmp_path / "lineage.json"
 
-        with patch(
-            "keboola_agent_cli.services.deep_lineage_service."
-            "DeepLineageService._add_cross_project_lineage"
-        ):
-            result = self._runner().invoke(
-                app,
-                [
-                    "--json",
-                    "--config-dir",
-                    str(tmp_path / "cfg"),
-                    "lineage",
-                    "build",
-                    "--directory",
-                    str(empty),
-                    "--output",
-                    str(cache_path),
-                ],
-            )
+        result = self._runner().invoke(
+            app,
+            [
+                "--json",
+                "--config-dir",
+                str(tmp_path / "cfg"),
+                "lineage",
+                "build",
+                "--directory",
+                str(empty),
+                "--output",
+                str(cache_path),
+            ],
+        )
 
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)["data"]

@@ -228,7 +228,7 @@ projects contain tables with the same name.
 | `input_mapping` | Config input mapping definitions | Deterministic |
 | `output_mapping` | Config output mapping definitions | Deterministic |
 | `sql_tokenizer` / `sql_tokenizer_cross_project` | SQL parsing for Snowflake table references | Deterministic |
-| `bucket_sharing` | Cross-project bucket sharing (`kbagent sharing edges`) | Deterministic |
+| `bucket_sharing` | Linked-bucket source metadata (`source_bucket`) in synced `storage/buckets.json` files | Deterministic |
 | `ai` / `ai_cross_project` | AI analysis of SQL / Python code | Requires `--ai` |
 
 Detection says *how* an edge was found; `edge_type` (`reads`, `writes`,

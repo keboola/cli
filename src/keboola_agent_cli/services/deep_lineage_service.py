@@ -10,7 +10,6 @@ Architecture: reads from disk only, no API calls. Requires sync'd data.
 import json
 import logging
 import re
-import subprocess
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -26,6 +25,7 @@ from ._lineage_mermaid import (
     sanitize_mermaid_id,
 )
 from ._lineage_paths import select_scan_entries, skipped_trees_warning
+from ._lineage_sharing import SyncedProject, add_sharing_edges
 from ._lineage_trace import is_config_node, trace_column, union_edges, walk_edges
 
 logger = logging.getLogger(__name__)
@@ -290,6 +290,7 @@ class LineageGraph:
     _upstream: dict[str, list[int]] = field(default_factory=dict)
     _downstream: dict[str, list[int]] = field(default_factory=dict)
     _project_id_to_alias: dict[int, str] = field(default_factory=dict)
+    _synced_projects_with_tables: list[SyncedProject] = field(default_factory=list)
 
     def add_edge(self, edge: Edge) -> None:
         idx = len(self.edges)
@@ -455,7 +456,7 @@ class DeepLineageService:
         self._build_deterministic_edges(graph, project_id_to_alias)
 
         # Phase 3: Cross-project sharing
-        self._add_cross_project_lineage(graph, root)
+        add_sharing_edges(graph, warnings)
 
         # Phase 4a: Apply existing AI results (if any)
         ai_status = self._apply_ai_results_file(graph, root, project_id_to_alias)
@@ -693,10 +694,12 @@ class DeepLineageService:
         with open(manifest_path) as f:
             manifest = json.load(f)
 
-        project_id = manifest.get("project", {}).get("id", 0)
+        project = manifest.get("project", {})
+        project_id = project.get("id", 0)
         project_id_to_alias[project_id] = project_alias
 
         # Scan storage tables
+        table_count_before = len(graph.tables)
         storage_dir = project_dir / "storage" / "tables"
         if storage_dir.exists():
             for bucket_dir in sorted(storage_dir.iterdir()):
@@ -716,6 +719,10 @@ class DeepLineageService:
                         rows_count=meta.get("rows_count", 0),
                     )
                     graph.tables[table.fqn] = table
+        if len(graph.tables) > table_count_before:
+            graph._synced_projects_with_tables.append(
+                SyncedProject(project_dir, project_alias, project_id, project.get("apiHost", ""))
+            )
 
         # Scan configurations from their branch tree (never a hardcoded ``main``).
         selection = select_scan_entries(manifest)
@@ -862,49 +869,6 @@ class DeepLineageService:
                             columns=columns,
                         )
                     )
-
-    def _add_cross_project_lineage(self, graph: LineageGraph, root: Path) -> None:
-        try:
-            result = subprocess.run(
-                ["kbagent", "--json", "sharing", "edges"],
-                capture_output=True,
-                check=False,
-                text=True,
-                cwd=str(root),
-                timeout=120,
-            )
-            if result.returncode != 0:
-                return
-            data = json.loads(result.stdout)
-            for edge_data in data.get("data", {}).get("edges", []):
-                source_alias = edge_data.get("source_project_alias", "")
-                target_alias = edge_data.get("target_project_alias", "")
-                source_bucket = edge_data.get("source_bucket_id", "")
-                target_bucket = edge_data.get("target_bucket_id", "")
-                if not source_alias or not target_alias:
-                    continue
-                source_tables = {
-                    t.name: t
-                    for t in graph.tables.values()
-                    if t.project_alias == source_alias and t.bucket_id == source_bucket
-                }
-                for t in graph.tables.values():
-                    if t.project_alias == target_alias and t.bucket_id == target_bucket:
-                        source_table = source_tables.get(t.name)
-                        if source_table:
-                            graph.add_edge(
-                                Edge(
-                                    source_fqn=source_table.fqn,
-                                    target_fqn=t.fqn,
-                                    source_type="table",
-                                    target_type="table",
-                                    edge_type="cross_project_share",
-                                    detection="bucket_sharing",
-                                    columns=source_table.columns,
-                                )
-                            )
-        except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
-            pass
 
     def _apply_ai_results_file(
         self,
